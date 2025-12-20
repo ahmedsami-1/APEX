@@ -1,769 +1,656 @@
-import { useEffect, useMemo, useState } from "react";
-import { Routes, Route, Link, useNavigate, useLocation } from "react-router-dom";
+import React, { useEffect, useMemo, useState } from "react";
+import "./apex.css";
 
-/* =======================
-   ADMIN PIN
-======================= */
-const ADMIN_PIN = "4321";
+import { supabase } from "./supabaseClient";
+import { Auth } from "@supabase/auth-ui-react";
+import { ThemeSupa } from "@supabase/auth-ui-shared";
 
-/* =======================
-   PIN GUARD
-======================= */
-function RequireAdminPin({ children }) {
-  const nav = useNavigate();
-  const loc = useLocation();
-  const [pin, setPin] = useState("");
-  const [err, setErr] = useState("");
+/**
+ * API base:
+ * - لو شغال لوكال: حط VITE_API_BASE=http://localhost:3001
+ * - لو نفس الدومين (Render Serve static + API نفس السيرفيس): سيبه فاضي
+ */
+const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
-  const ok = localStorage.getItem("apex_admin_ok") === "1";
-
-  function submit(e) {
-    e.preventDefault();
-    setErr("");
-    if (pin === ADMIN_PIN) {
-      localStorage.setItem("apex_admin_ok", "1");
-      nav("/admin", { replace: true, state: { from: loc.pathname } });
-    } else {
-      setErr("Wrong PIN");
-    }
-  }
-
-  if (ok) return children;
-
-  return (
-    <div className="container">
-      <div className="card" style={{ maxWidth: 560, margin: "0 auto" }}>
-        <div className="cardHead">
-          <div>
-            <div className="cardTitle">APEX Admin</div>
-            <div className="cardHint">Enter PIN to continue</div>
-          </div>
-          <span className="badge">LOCKED</span>
-        </div>
-
-        <div className="cardBody">
-          <form onSubmit={submit}>
-            <div className="field">
-              <div className="label">PIN</div>
-              <input
-                className="input"
-                type="password"
-                inputMode="numeric"
-                placeholder="••••"
-                value={pin}
-                onChange={(e) => setPin(e.target.value)}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 10, marginTop: 12 }}>
-              <button className="btn btnGold" type="submit">
-                Unlock
-              </button>
-              <Link className="btn" to="/">
-                Back to store
-              </Link>
-            </div>
-
-            {err ? <div className="noticeErr">{err}</div> : null}
-          </form>
-        </div>
-      </div>
-    </div>
-  );
+function apiUrl(path) {
+  if (!API_BASE) return path;
+  return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
 }
 
-/* =======================
-   HOME
-======================= */
-function Home() {
-  const [loading, setLoading] = useState(false);
-  const [out, setOut] = useState(null); // original response from backend
-  const [err, setErr] = useState("");
+const DEFAULT_PREFS = {
+  method: "espresso",
+  strength: "balanced",
+  flavor_direction: "chocolate_nuts",
+  acidity: "medium",
+  time: "morning",
+  milk: "black",
+};
 
-  // core inputs
-  const [line, setLine] = useState("daily");
+const METHOD_OPTIONS = [
+  { v: "espresso", label: "Espresso" },
+  { v: "v60", label: "V60" },
+  { v: "filter", label: "Filter" },
+  { v: "turkish", label: "Turkish" },
+];
+
+const STRENGTH_OPTIONS = [
+  { v: "soft", label: "Soft" },
+  { v: "balanced", label: "Balanced" },
+  { v: "strong", label: "Strong" },
+];
+
+const FLAVOR_OPTIONS = [
+  { v: "chocolate_nuts", label: "Chocolate + Nuts" },
+  { v: "caramel_cocoa", label: "Caramel + Cocoa" },
+  { v: "floral_citrus", label: "Floral + Citrus" },
+  { v: "earthy_dark", label: "Earthy + Dark chocolate" },
+];
+
+const ACIDITY_OPTIONS = [
+  { v: "low", label: "Low" },
+  { v: "medium", label: "Medium" },
+  { v: "high", label: "High" },
+];
+
+const TIME_OPTIONS = [
+  { v: "morning", label: "Morning" },
+  { v: "afternoon", label: "Afternoon" },
+  { v: "night", label: "Night" },
+];
+
+const MILK_OPTIONS = [
+  { v: "black", label: "Black" },
+  { v: "with_milk", label: "With milk" },
+];
+
+function safeText(v) {
+  if (v == null) return "";
+  return String(v);
+}
+
+export default function App() {
+  // Auth
+  const [session, setSession] = useState(null);
+  const [authOpen, setAuthOpen] = useState(false);
+
+  // Blend builder
+  const [line, setLine] = useState("daily"); // daily|premium
   const [sizeG, setSizeG] = useState(250);
+  const [prefs, setPrefs] = useState(DEFAULT_PREFS);
 
-  // preferences
-  const [method, setMethod] = useState("espresso");
-  const [strength, setStrength] = useState("balanced");
-  const [flavor, setFlavor] = useState("chocolate_nuts");
-  const [acidity, setAcidity] = useState("medium");
-  const [time, setTime] = useState("morning");
-  const [milk, setMilk] = useState("black");
+  const [loadingBlend, setLoadingBlend] = useState(false);
+  const [blend, setBlend] = useState(null);
+  const [blendErr, setBlendErr] = useState("");
 
-  // naming
-  const [customName, setCustomName] = useState("");
-  const [usingAlt, setUsingAlt] = useState(false);
+  // Save blends
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [savedBlends, setSavedBlends] = useState([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
 
-  // cart / checkout
-  const [cart, setCart] = useState([]);
-  const [custName, setCustName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("");
-  const [notes, setNotes] = useState("");
-  const [placing, setPlacing] = useState(false);
-  const [orderRes, setOrderRes] = useState(null);
+  const user = session?.user || null;
+  const canSave = Boolean(user && blend && Array.isArray(blend.recipe));
 
-  // Tell CSS which line is active (daily / premium)
-  useEffect(() => {
-    document.body.dataset.line = line;
-    return () => {
-      delete document.body.dataset.line;
-    };
-  }, [line]);
-
-  // When new output arrives, default to main pick and set name
-  useEffect(() => {
-    if (!out) return;
-    setUsingAlt(false);
-    setCustomName(out.blend_name_suggestion || "APEX Custom");
-  }, [out]);
-
-  const activePick = useMemo(() => {
-    if (!out) return null;
-    if (usingAlt && out.second_pick) {
-      return {
-        isAlt: true,
-        blend_name_suggestion: out.second_pick.blend_name_suggestion,
-        short_why: out.second_pick.short_why,
-        recipe: out.second_pick.recipe,
-        // price/pricing remain from main pick in this MVP (you can price alt later if you want)
-        price: out.price,
-        pricing: out.pricing,
-      };
-    }
+  const headline = useMemo(() => {
+    // الجمل اللي انت شايفها أحسن: تمام جدًا
     return {
-      isAlt: false,
-      blend_name_suggestion: out.blend_name_suggestion,
-      short_why: out.short_why,
-      recipe: out.recipe,
-      price: out.price,
-      pricing: out.pricing,
+      titleA: "Purebred Power.",
+      titleB: "Pure Arabica.",
+      subtitle:
+        "AI-crafted blends based on your taste and routine. Your coffee. Your signature.",
+      micro:
+        "Your blend. Your identity. Crafted by AI, roasted by APEX.",
     };
-  }, [out, usingAlt]);
+  }, []);
 
-  async function getBlend() {
-    setErr("");
-    setOut(null);
-    setOrderRes(null);
-    setLoading(true);
+  // Load auth session
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getSession().then(({ data, error }) => {
+      if (!mounted) return;
+      if (error) console.warn("getSession error:", error);
+      setSession(data.session || null);
+    });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, s) => {
+      setSession(s || null);
+    });
+
+    return () => {
+      mounted = false;
+      sub?.subscription?.unsubscribe?.();
+    };
+  }, []);
+
+  // When user logs in, load their saved blends
+  useEffect(() => {
+    if (!user?.id) {
+      setSavedBlends([]);
+      return;
+    }
+    loadSavedBlends();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  async function fetchBlend() {
+    setBlendErr("");
+    setSaveMsg("");
+    setLoadingBlend(true);
+    setBlend(null);
 
     try {
-      const res = await fetch("/api/recommend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          size_g: Number(sizeG),
-          line,
-          preferences: {
-            method,
-            strength,
-            flavor_direction: flavor,
-            acidity,
-            time,
-            milk,
-          },
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Request failed");
-
-      setOut(data);
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function addToCart() {
-    if (!activePick) return;
-
-    const title = (customName || activePick.blend_name_suggestion || "APEX Custom").trim();
-
-    setCart((c) => [
-      ...c,
-      {
-        title,
-        price: Number(activePick.price || 0),
+      const payload = {
+        size_g: sizeG,
         line,
-        size_g: Number(sizeG),
-        recipe: activePick.recipe || [],
-      },
-    ]);
-  }
+        preferences: {
+          method: prefs.method,
+          strength: prefs.strength,
+          flavor_direction: prefs.flavor_direction,
+          acidity: prefs.acidity,
+          time: prefs.time,
+          milk: prefs.milk,
+        },
+      };
 
-  function removeItem(idx) {
-    setCart((c) => c.filter((_, i) => i !== idx));
-  }
-
-  async function placeOrder() {
-    setOrderRes(null);
-    setErr("");
-
-    if (!cart.length) return setErr("Cart is empty.");
-    if (!custName || !phone || !address) return setErr("Name, phone, address are required.");
-
-    setPlacing(true);
-    try {
-      const res = await fetch("/api/orders", {
+      const res = await fetch(apiUrl("/api/recommend"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          customer: { name: custName, phone, address, notes },
-          items: cart,
-        }),
+        body: JSON.stringify(payload),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Order failed");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to generate blend");
 
-      setOrderRes(data.order);
-      setCart([]);
+      setBlend(data);
     } catch (e) {
-      setErr(String(e.message || e));
+      setBlendErr(String(e?.message || e));
     } finally {
-      setPlacing(false);
+      setLoadingBlend(false);
     }
   }
 
-  const total = cart.reduce((s, it) => s + (Number(it.price) || 0), 0);
-  const isPremium = line === "premium";
-  const hasAlt = !!out?.second_pick;
+  async function signOut() {
+    await supabase.auth.signOut();
+    setAuthOpen(false);
+  }
+
+  async function loadSavedBlends() {
+    if (!user) return;
+    setLoadingSaved(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("saved_blends")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (error) throw error;
+      setSavedBlends(data || []);
+    } catch (e) {
+      console.error("loadSavedBlends:", e);
+    } finally {
+      setLoadingSaved(false);
+    }
+  }
+
+  async function saveCurrentBlend() {
+    setSaveMsg("");
+
+    if (!user) {
+      setSaveMsg("Login required to save blends.");
+      setAuthOpen(true);
+      return;
+    }
+    if (!blend || !Array.isArray(blend.recipe)) return;
+
+    setSaving(true);
+    try {
+      const row = {
+        user_id: user.id,
+        blend_name: safeText(blend.blend_name_suggestion || "APEX Custom Blend"),
+        line,
+        size_g: sizeG,
+        preferences: prefs,
+        recipe: blend.recipe,
+        price: Number(blend.price || 0),
+      };
+
+      const { error } = await supabase.from("saved_blends").insert([row]);
+      if (error) throw error;
+
+      setSaveMsg("Saved ✅");
+      await loadSavedBlends();
+    } catch (e) {
+      setSaveMsg(String(e?.message || e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Theme class: premium يغيّر الإضاءة كلها + يوضح الحصان
+  const themeClass = line === "premium" ? "apexThemePremium" : "apexThemeDaily";
 
   return (
-    <div className="container">
-      <div className="topbar">
-        <div className="brand">
-          <div className="logoRow">
-            <div className="wordmark">APEX</div>
-            <span className="badge">PURE ARABICA</span>
-          </div>
-          <div className="subtitle">Your blend. Your identity. Crafted by AI, roasted by APEX.</div>
+    <div className={`apexApp ${themeClass}`}>
+      {/* ===== Top bar ===== */}
+      <header className="apexTopbar">
+        <div className="apexBrand">
+          <div className="apexLogo">APEX</div>
+          <div className="apexTag">PURE ARABICA</div>
         </div>
 
-        <div className="navbtns">
-          <Link className="btn" to="/admin">
+        <div className="apexTopActions">
+          <button
+            className="apexPillBtn"
+            type="button"
+            onClick={() => alert("Admin panel (next)")}
+          >
             Admin
-          </Link>
-          <a className="btn" href="http://localhost:3001/health" target="_blank" rel="noreferrer">
+          </button>
+          <button
+            className="apexPillBtn"
+            type="button"
+            onClick={() => window.open(apiUrl("/health"), "_blank")}
+          >
             Backend
-          </a>
-        </div>
-      </div>
+          </button>
 
-      {/* HERO */}
-      <div className="hero">
-        <img className="heroHorseImg" src="/src/assets/apex-horse.png" alt="APEX horse" />
-        <div className="heroInner">
-          <div>
-            <h2 className="heroTitle">
-              <span>Purebred Power.</span> Pure Arabica.
-            </h2>
-            <div className="heroSub">
-              AI-crafted blends based on your taste and routine. Your coffee . Your Signature.
+          <button
+            className="apexPillBtn apexPillBtnGold"
+            type="button"
+            onClick={() => setAuthOpen(true)}
+          >
+            {user ? "Account" : "Login"}
+          </button>
+        </div>
+      </header>
+
+      <div className="apexSubline">{headline.micro}</div>
+
+      {/* ===== Hero ===== */}
+      <section className="apexHero">
+        <div className="apexHeroCard">
+          <div className="apexHeroText">
+            <div className="apexHeroTitle">
+              <span className="apexGold">{headline.titleA}</span>{" "}
+              <span>{headline.titleB}</span>
+            </div>
+
+            <div className="apexHeroSubtitle">{headline.subtitle}</div>
+
+            <div className="apexHeroPills">
+              <span className="apexPill">Exact grams</span>
+              <span className="apexPill">Fresh roast</span>
+              <span className="apexPill">COD</span>
             </div>
           </div>
 
-          {/* Keep this minimal to avoid visual noise */}
-          <div className="pillRow" style={{ marginTop: 2 }}>
-          </div>
+          {/* Horse area */}
+          <div className="apexHeroHorse" aria-hidden="true" />
         </div>
-      </div>
+      </section>
 
-      {err ? <div className="noticeErr">{err}</div> : null}
-      {orderRes ? (
-        <div className="noticeOk">
-          ✅ Order created: <b>{orderRes.id}</b>
-        </div>
-      ) : null}
-
-      <div className="grid2">
-        {/* LEFT: BLEND BUILDER */}
-        <div className="card">
-          <div className="cardHead">
+      {/* ===== Main grid ===== */}
+      <main className="apexGrid">
+        {/* ===== Blend Builder ===== */}
+        <section className="apexCard">
+          <div className="apexCardHead">
             <div>
-              <div className="cardTitle">Blend Builder</div>
-              <div className="cardHint">Get the main recommendation, plus an alternative pick</div>
+              <div className="apexCardTitle">Blend Builder</div>
+              <div className="apexCardSub">
+                Get the main recommendation, plus an alternative pick
+              </div>
             </div>
-            <button className="btn btnGold" onClick={getBlend} disabled={loading}>
-              {loading ? "Crafting…" : "Get My Blend"}
+
+            <button
+              className="apexBtnGold"
+              type="button"
+              onClick={fetchBlend}
+              disabled={loadingBlend}
+            >
+              {loadingBlend ? "Generating..." : "Get My Blend"}
             </button>
           </div>
 
-          <div className="cardBody">
-            <div className="formRow">
-              {/* SLIDER TOGGLE */}
-              <div className="field">
-                <div className="label">Line</div>
-                <div className={"toggleSlider " + (isPremium ? "isPremium" : "isDaily")}>
-                  <div className="toggleKnob" />
-                  <button type="button" className="toggleBtn" onClick={() => setLine("daily")}>
-                    Daily
-                  </button>
-                  <button type="button" className="toggleBtn" onClick={() => setLine("premium")}>
-                    Premium
-                  </button>
-                </div>
-              </div>
+          <div className="apexCardDivider" />
 
-              <div className="field">
-                <div className="label">Size</div>
-                <select className="select" value={sizeG} onChange={(e) => setSizeG(Number(e.target.value))}>
-                  <option value={250}>250g</option>
-                  <option value={500}>500g</option>
-                  <option value={1000}>1kg</option>
-                </select>
-              </div>
+          <div className="apexBadges">
+            <span className="apexBadge">Accurate grams</span>
+            <span className="apexBadge">Stock aware</span>
+            <span className="apexBadge">Pricing included</span>
+            <span className="apexBadge">Daily / Premium</span>
+          </div>
 
-              <div className="field">
-                <div className="label">Brew method</div>
-                <select className="select" value={method} onChange={(e) => setMethod(e.target.value)}>
-                  <option value="espresso">Espresso</option>
-                  <option value="v60">V60 / Pour-over</option>
-                  <option value="moka">Moka pot</option>
-                  <option value="french_press">French press</option>
-                </select>
-              </div>
-
-              <div className="field">
-                <div className="label">Strength</div>
-                <select className="select" value={strength} onChange={(e) => setStrength(e.target.value)}>
-                  <option value="soft">Soft</option>
-                  <option value="balanced">Balanced</option>
-                  <option value="strong">Strong</option>
-                </select>
-              </div>
-
-              <div className="field">
-                <div className="label">Flavor direction</div>
-                <select className="select" value={flavor} onChange={(e) => setFlavor(e.target.value)}>
-                  <option value="chocolate_nuts">Chocolate + Nuts</option>
-                  <option value="caramel_cocoa">Caramel + Cocoa</option>
-                  <option value="floral_citrus">Floral + Citrus</option>
-                  <option value="earthy_dark">Earthy + Dark chocolate</option>
-                </select>
-              </div>
-
-              <div className="field">
-                <div className="label">Acidity</div>
-                <select className="select" value={acidity} onChange={(e) => setAcidity(e.target.value)}>
-                  <option value="low">Low</option>
-                  <option value="medium">Medium</option>
-                  <option value="high">High</option>
-                </select>
-              </div>
-
-              <div className="field">
-                <div className="label">Time</div>
-                <select className="select" value={time} onChange={(e) => setTime(e.target.value)}>
-                  <option value="morning">Morning</option>
-                  <option value="afternoon">Afternoon</option>
-                  <option value="night">Night</option>
-                </select>
-              </div>
-
-              <div className="field">
-                <div className="label">Milk</div>
-                <select className="select" value={milk} onChange={(e) => setMilk(e.target.value)}>
-                  <option value="black">Black</option>
-                  <option value="milk">With milk</option>
-                </select>
+          <div className="apexFormGrid">
+            {/* Line */}
+            <div className="apexField">
+              <div className="apexLabel">Line</div>
+              <div className="apexSeg">
+                <button
+                  type="button"
+                  className={`apexSegBtn ${
+                    line === "daily" ? "isActive" : ""
+                  }`}
+                  onClick={() => setLine("daily")}
+                >
+                  Daily (optimum)
+                </button>
+                <button
+                  type="button"
+                  className={`apexSegBtn ${
+                    line === "premium" ? "isActive" : ""
+                  }`}
+                  onClick={() => setLine("premium")}
+                >
+                  Premium (best taste)
+                </button>
               </div>
             </div>
 
-            {activePick ? (
-              <>
-                <div className="hr" />
+            {/* Size */}
+            <div className="apexField">
+              <div className="apexLabel">Size</div>
+              <select
+                className="apexSelect"
+                value={sizeG}
+                onChange={(e) => setSizeG(parseInt(e.target.value, 10))}
+              >
+                <option value={250}>250g</option>
+                <option value={500}>500g</option>
+                <option value={1000}>1kg</option>
+              </select>
+            </div>
 
-                {/* Pick switch */}
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                  <span className="badge">{activePick.isAlt ? "ALTERNATIVE" : "MAIN PICK"}</span>
+            {/* Brew */}
+            <div className="apexField">
+              <div className="apexLabel">Brew method</div>
+              <select
+                className="apexSelect"
+                value={prefs.method}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, method: e.target.value }))
+                }
+              >
+                {METHOD_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-                  {hasAlt ? (
-                    <button
-                      className="btn"
-                      type="button"
-                      onClick={() => {
-                        setUsingAlt((v) => !v);
-                        // also update custom name to match the chosen pick
-                        const next = !usingAlt;
-                        const newName = next ? out.second_pick.blend_name_suggestion : out.blend_name_suggestion;
-                        setCustomName(newName || "");
-                      }}
-                    >
-                      {usingAlt ? "Use main pick" : "Try alternative"}
-                    </button>
-                  ) : (
-                    <span className="pill">No alternative available</span>
-                  )}
-                </div>
+            {/* Strength */}
+            <div className="apexField">
+              <div className="apexLabel">Strength</div>
+              <select
+                className="apexSelect"
+                value={prefs.strength}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, strength: e.target.value }))
+                }
+              >
+                {STRENGTH_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-                <div className="hr" />
+            {/* Flavor */}
+            <div className="apexField">
+              <div className="apexLabel">Flavor direction</div>
+              <select
+                className="apexSelect"
+                value={prefs.flavor_direction}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, flavor_direction: e.target.value }))
+                }
+              >
+                {FLAVOR_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-                <div className="kpiRow">
-                  <div className="kpi">
-                    <div className="kpiLabel">Blend name</div>
-                    <input className="input" value={customName} onChange={(e) => setCustomName(e.target.value)} />
-                  </div>
-                  <div className="kpi">
-                    <div className="kpiLabel">Price</div>
-                    <div className="kpiValue">{activePick.price} EGP</div>
-                  </div>
-                  <div className="kpi">
-                    <div className="kpiLabel">Attempts</div>
-                    <div className="kpiValue">
-                      {out?.meta?.attempts ?? "-"} {out?.meta?.usedAutofix ? "(autofix)" : ""}
-                    </div>
-                  </div>
-                </div>
+            {/* Acidity */}
+            <div className="apexField">
+              <div className="apexLabel">Acidity</div>
+              <select
+                className="apexSelect"
+                value={prefs.acidity}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, acidity: e.target.value }))
+                }
+              >
+                {ACIDITY_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-                {/* short_why (3 sentences) */}
-                <div style={{ marginTop: 12, color: "var(--muted)" }}>
-                  {activePick.short_why || "—"}
-                </div>
+            {/* Time */}
+            <div className="apexField">
+              <div className="apexLabel">Time</div>
+              <select
+                className="apexSelect"
+                value={prefs.time}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, time: e.target.value }))
+                }
+              >
+                {TIME_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-                <div className="hr" />
+            {/* Milk */}
+            <div className="apexField">
+              <div className="apexLabel">Milk</div>
+              <select
+                className="apexSelect"
+                value={prefs.milk}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, milk: e.target.value }))
+                }
+              >
+                {MILK_OPTIONS.map((o) => (
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
 
-                <div className="cardTitle" style={{ marginBottom: 10 }}>
-                  Recipe ({sizeG}g)
-                </div>
+          <div className="apexHint">Craft a blend that feels like you.</div>
 
-                {/* Bars */}
+          {/* Errors */}
+          {blendErr ? <div className="apexError">{blendErr}</div> : null}
+
+          {/* Result */}
+          {blend ? (
+            <div className="apexResult">
+              <div className="apexResultTop">
                 <div>
-                  {(() => {
-                    const recipe = activePick.recipe || [];
-                    const maxG = Math.max(...recipe.map((r) => Number(r.grams) || 0), 1);
-                    return recipe.map((r) => {
-                      const pct = Math.max(0, Math.min(100, ((Number(r.grams) || 0) / maxG) * 100));
-                      return (
-                        <div className="barRow" key={r.origin_code}>
-                          <div className="barMeta">
-                            <div className="barName">{r.origin_name}</div>
-                            <div className="barCode">{r.origin_code}</div>
-                          </div>
-                          <div className="barTrack">
-                            <div className="barFill" style={{ width: pct + "%" }} />
-                          </div>
-                          <div className="barGrams">{r.grams}g</div>
-                        </div>
-                      );
-                    });
-                  })()}
+                  <div className="apexBlendName">
+                    {safeText(blend.blend_name_suggestion)}
+                  </div>
+                  <div className="apexBlendWhy">{safeText(blend.why)}</div>
                 </div>
 
-                {/* Table */}
-                <table className="table" style={{ marginTop: 10 }}>
-                  <thead>
-                    <tr>
-                      <th>Origin</th>
-                      <th>Code</th>
-                      <th>Grams</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(activePick.recipe || []).map((r) => (
-                      <tr key={r.origin_code}>
-                        <td>{r.origin_name}</td>
-                        <td className="mono" style={{ padding: "8px 10px", display: "inline-block" }}>
-                          {r.origin_code}
-                        </td>
-                        <td>
-                          <b>{r.grams}g</b>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-
-                <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  <button className="btn btnGold" onClick={addToCart}>
-                    Add to Cart
-                  </button>
+                <div className="apexPriceBox">
+                  <div className="apexPriceLabel">Price</div>
+                  <div className="apexPrice">{Number(blend.price || 0)} EGP</div>
                 </div>
-
-                <div style={{ marginTop: 12 }}>
-                  <details>
-                    <summary style={{ cursor: "pointer", color: "var(--muted)" }}>Show raw JSON</summary>
-                    <pre className="mono">{JSON.stringify(out, null, 2)}</pre>
-                  </details>
-                </div>
-              </>
-            ) : (
-              <div style={{ marginTop: 12, color: "var(--muted)" }}>
-                Craft a blend that feels like you .
               </div>
-            )}
-          </div>
-        </div>
 
-        {/* RIGHT: CART & CHECKOUT */}
-        <div className="card">
-          <div className="cardHead">
-            <div>
-              <div className="cardTitle">Cart & Checkout</div>
-              <div className="cardHint">Cash on delivery MVP</div>
-            </div>
-            <div className="badge">COD</div>
-          </div>
+              <div className="apexRecipeTitle">Recipe ({sizeG}g)</div>
 
-          <div className="cardBody">
-            <div className="cardTitle" style={{ marginBottom: 10 }}>
-              Cart
-            </div>
-
-            {cart.length === 0 ? (
-              <div style={{ color: "var(--muted)" }}>Empty</div>
-            ) : (
-              <div style={{ display: "grid", gap: 10 }}>
-                {cart.map((it, idx) => (
-                  <div key={idx} className="card" style={{ boxShadow: "none" }}>
-                    <div className="cardBody" style={{ padding: 12 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                        <div style={{ fontWeight: 800 }}>{it.title}</div>
-                        <div style={{ fontWeight: 800, color: "var(--gold2)" }}>{it.price} EGP</div>
+              <div className="apexRecipeGrid">
+                {blend.recipe.map((r, idx) => (
+                  <div className="apexRecipeRow" key={`${r.origin_code}-${idx}`}>
+                    <div className="apexRecipeOrigin">
+                      <div className="apexRecipeName">
+                        {safeText(r.origin_name)}
                       </div>
-                      <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 6 }}>
-                        {it.size_g}g • {it.line}
-                      </div>
-                      <div style={{ marginTop: 8 }}>
-                        <button className="btn" onClick={() => removeItem(idx)}>
-                          Remove
-                        </button>
+                      <div className="apexRecipeCode">
+                        {safeText(r.origin_code)}
                       </div>
                     </div>
+                    <div className="apexRecipeGrams">{Number(r.grams)}g</div>
                   </div>
                 ))}
               </div>
-            )}
 
-            <div className="hr" />
-            <div className="kpiRow">
-              <div className="kpi">
-                <div className="kpiLabel">Total</div>
-                <div className="kpiValue">{total} EGP</div>
+              <div className="apexResultActions">
+                <button
+                  className="apexBtnGold"
+                  type="button"
+                  onClick={saveCurrentBlend}
+                  disabled={!blend || saving}
+                >
+                  {saving ? "Saving..." : "Save Blend"}
+                </button>
+
+                <div className="apexSaveMeta">
+                  {saveMsg
+                    ? saveMsg
+                    : user
+                    ? `Logged in: ${user.email || user.id}`
+                    : "Login to save your blends."}
+                </div>
               </div>
             </div>
+          ) : null}
+        </section>
 
-            <div className="hr" />
+        {/* ===== Cart & Checkout (placeholder) ===== */}
+        <section className="apexCard">
+          <div className="apexCardHead">
+            <div>
+              <div className="apexCardTitle">Cart & Checkout</div>
+              <div className="apexCardSub">Cash on delivery MVP</div>
+            </div>
+            <span className="apexChip">COD</span>
+          </div>
 
-            <div className="cardTitle" style={{ marginBottom: 10 }}>
+          <div className="apexCardDivider" />
+
+          <div className="apexCartBlock">
+            <div className="apexCartTitle">Cart</div>
+            <div className="apexCartEmpty">Empty</div>
+
+            <div className="apexTotalBox">
+              <div className="apexTotalLabel">Total</div>
+              <div className="apexTotalValue">0 EGP</div>
+            </div>
+
+            <div className="apexCartTitle" style={{ marginTop: 14 }}>
               Delivery details
             </div>
 
-            <div className="field">
-              <div className="label">Name</div>
-              <input className="input" value={custName} onChange={(e) => setCustName(e.target.value)} placeholder="Customer name" />
+            <div className="apexCheckoutGrid">
+              <input className="apexInput" placeholder="Customer name" />
+              <input className="apexInput" placeholder="01xxxxxxxxx" />
+              <input className="apexInput" placeholder="City, street, building..." />
+              <textarea className="apexTextarea" placeholder="Optional notes" />
             </div>
 
-            <div className="field" style={{ marginTop: 10 }}>
-              <div className="label">Phone</div>
-              <input className="input" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="01xxxxxxxxx" />
-            </div>
+            <button className="apexBtnGold" type="button" style={{ marginTop: 12 }}>
+              Place Order
+            </button>
 
-            <div className="field" style={{ marginTop: 10 }}>
-              <div className="label">Address</div>
-              <input className="input" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="City, street, building…" />
+            <div className="apexTinyNote" style={{ marginTop: 10 }}>
+              Orders are stored in <code>server/data/orders.json</code> (MVP)
             </div>
+          </div>
+        </section>
+      </main>
 
-            <div className="field" style={{ marginTop: 10 }}>
-              <div className="label">Notes</div>
-              <textarea className="textarea" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional notes" />
+      {/* ===== Saved blends (visible only when logged in) ===== */}
+      {user ? (
+        <section className="apexSaved">
+          <div className="apexSavedHead">
+            <div className="apexSavedTitle">My Saved Blends</div>
+            <button className="apexPillBtn" type="button" onClick={loadSavedBlends}>
+              {loadingSaved ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {savedBlends.length === 0 ? (
+            <div className="apexSavedEmpty">No saved blends yet.</div>
+          ) : (
+            <div className="apexSavedGrid">
+              {savedBlends.map((b) => (
+                <div className="apexSavedCard" key={b.id}>
+                  <div className="apexSavedName">{safeText(b.blend_name)}</div>
+                  <div className="apexSavedMeta">
+                    {safeText(b.line).toUpperCase()} • {Number(b.size_g)}g •{" "}
+                    {Number(b.price)} EGP
+                  </div>
+                  <div className="apexSavedWhen">
+                    {b.created_at ? new Date(b.created_at).toLocaleString() : ""}
+                  </div>
+                </div>
+              ))}
             </div>
+          )}
+        </section>
+      ) : null}
 
-            <div style={{ marginTop: 12, display: "flex", gap: 10 }}>
-              <button className="btn btnGold" onClick={placeOrder} disabled={placing}>
-                {placing ? "Placing…" : "Place Order"}
+      {/* ===== Auth Modal ===== */}
+      {authOpen ? (
+        <div className="apexModalOverlay" onMouseDown={() => setAuthOpen(false)}>
+          <div
+            className="apexModalCard"
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="apexModalTop">
+              <div className="apexModalTitle">{user ? "Account" : "Login"}</div>
+              <button
+                className="apexModalClose"
+                onClick={() => setAuthOpen(false)}
+              >
+                ✕
               </button>
             </div>
 
-            <div className="trustRow">
-              <div className="trust">☕ Freshly roasted</div>
-              <div className="trust">📦 Cash on delivery</div>
-              <div className="trust">🧾 Exact grams recipe</div>
+            {user ? (
+              <div className="apexAccountBox">
+                <div className="apexAccountLine">
+                  Signed in as: <b>{user.email || user.id}</b>
+                </div>
+                <button className="apexBtnGold" type="button" onClick={signOut}>
+                  Sign out
+                </button>
+              </div>
+            ) : (
+              <Auth
+                supabaseClient={supabase}
+                appearance={{ theme: ThemeSupa }}
+                providers={["google"]}   // شيل apple
+                redirectTo={window.location.origin}
+                theme="dark"
+              />
+              
+            )}
+
+            <div className="apexTinyNote" style={{ marginTop: 10 }}>
+              Email + Google/Apple works now. Phone OTP needs an SMS provider.
             </div>
-
-            <div style={{ marginTop: 10, color: "var(--muted)", fontSize: 12 }}>
-              Orders stored locally in <span className="mono">server/data/orders.json</span>
-            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
-  );
-}
-
-/* =======================
-   ADMIN
-======================= */
-function Admin() {
-  const nav = useNavigate();
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState("");
-  const [orders, setOrders] = useState([]);
-  const [q, setQ] = useState("");
-
-  async function load() {
-    setErr("");
-    setLoading(true);
-    try {
-      const res = await fetch("/api/orders");
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Failed to load orders");
-      setOrders(Array.isArray(data.orders) ? data.orders : []);
-    } catch (e) {
-      setErr(String(e.message || e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    load();
-  }, []);
-
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return orders;
-    return orders.filter((o) => {
-      return (
-        String(o.id || "").toLowerCase().includes(s) ||
-        String(o.customer?.name || "").toLowerCase().includes(s) ||
-        String(o.customer?.phone || "").toLowerCase().includes(s)
-      );
-    });
-  }, [orders, q]);
-
-  return (
-    <div className="container">
-      <div className="topbar">
-        <div className="brand">
-          <div className="logoRow">
-            <div className="wordmark">APEX</div>
-            <span className="badge">ADMIN</span>
-          </div>
-          <div className="subtitle">Orders dashboard</div>
-        </div>
-
-        <div className="navbtns">
-          <button className="btn" onClick={() => nav("/")}>
-            Back
-          </button>
-          <button
-            className="btn"
-            onClick={() => {
-              localStorage.removeItem("apex_admin_ok");
-              window.location.href = "/admin";
-            }}
-          >
-            Logout
-          </button>
-        </div>
-      </div>
-
-      {err ? <div className="noticeErr">{err}</div> : null}
-
-      <div className="card" style={{ marginTop: 16 }}>
-        <div className="cardHead">
-          <div>
-            <div className="cardTitle">Orders</div>
-            <div className="cardHint">Search, refresh, review details</div>
-          </div>
-
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <input
-              className="input"
-              style={{ width: 320 }}
-              placeholder="Search by id, name, phone…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-            <button className="btn btnGold" onClick={load} disabled={loading}>
-              {loading ? "Loading…" : "Refresh"}
-            </button>
-          </div>
-        </div>
-
-        <div className="cardBody">
-          <div className="pillRow" style={{ marginBottom: 12 }}>
-            <span className="pill">{filtered.length} orders</span>
-            <span className="pill">
-              Raw:{" "}
-              <a className="mono" href="http://localhost:3001/api/orders" target="_blank" rel="noreferrer">
-                /api/orders
-              </a>
-            </span>
-          </div>
-
-          <div style={{ overflowX: "auto" }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Order</th>
-                  <th>Customer</th>
-                  <th>Phone</th>
-                  <th>Total</th>
-                  <th>Items</th>
-                  <th>Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((o) => (
-                  <tr key={o.id}>
-                    <td>
-                      <b>{o.id}</b>
-                      <div style={{ color: "var(--muted)", fontSize: 12 }}>{o.status}</div>
-                    </td>
-                    <td>{o.customer?.name}</td>
-                    <td>{o.customer?.phone}</td>
-                    <td>
-                      <b style={{ color: "var(--gold2)" }}>{o.total} EGP</b>
-                    </td>
-                    <td>
-                      {(o.items || []).map((it, idx) => (
-                        <div key={idx} style={{ marginBottom: 6 }}>
-                          <b>{it.title}</b> <span style={{ color: "var(--muted)" }}>({it.price} EGP)</span>
-                        </div>
-                      ))}
-                    </td>
-                    <td style={{ color: "var(--muted)" }}>
-                      {String(o.createdAt || "").replace("T", " ").replace("Z", "")}
-                    </td>
-                  </tr>
-                ))}
-                {filtered.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} style={{ color: "var(--muted)", padding: 12 }}>
-                      No orders yet.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* =======================
-   ROUTES
-======================= */
-export default function App() {
-  return (
-    <Routes>
-      <Route path="/" element={<Home />} />
-      <Route
-        path="/admin"
-        element={
-          <RequireAdminPin>
-            <Admin />
-          </RequireAdminPin>
-        }
-      />
-    </Routes>
   );
 }
