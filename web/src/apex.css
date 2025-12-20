@@ -378,3 +378,78 @@ body[data-line="premium"]::after{
 .toggleSlider.isPremium .toggleKnob{transform:translateX(calc(100% + 6px))}
 .toggleSlider.isDaily .toggleBtn:nth-child(2){color:var(--text)}
 .toggleSlider.isPremium .toggleBtn:nth-child(3){color:var(--text)}
+
+/* ===== Auth Modal ===== */
+.apexModalOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.72);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 99999;
+  padding: 18px;
+}
+
+.apexModalCard{
+  width: min(560px, 95vw);
+  max-height: 85vh;
+  overflow: auto;
+  background: rgba(18,18,18,0.92);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 18px;
+  box-shadow: 0 25px 90px rgba(0,0,0,0.6);
+  padding: 16px 16px 18px;
+}
+
+.apexModalHeader{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.apexModalTitle{
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.2px;
+}
+
+.apexModalClose{
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.9);
+  border-radius: 12px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.apexModalClose:hover{
+  background: rgba(255,255,255,0.10);
+}
+
+/* Prevent hero decorative layers from blocking clicks */
+.apexHero::before,
+.apexHero::after{
+  pointer-events: none;
+}
+
+/* Supabase Auth UI polishing (optional but helps visibility) */
+.sbui-auth-container,
+.sbui-auth-container *{
+  color: rgba(255,255,255,0.92) !important;
+}
+
+.sbui-input{
+  background: rgba(0,0,0,0.35) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+}
+
+.sbui-btn-primary{
+  background: #caa24b !important;
+  color: #151515 !important;
+  border: 0 !important;
+  font-weight: 800 !important;
+}
