@@ -638,8 +638,11 @@ export default function App() {
               <Auth
                 supabaseClient={supabase}
                 appearance={{ theme: ThemeSupa }}
-                providers={["google", "apple"]}
+                providers={["google"]}   // شيل apple
+                redirectTo={window.location.origin}
+                theme="dark"
               />
+              
             )}
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
