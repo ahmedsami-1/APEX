@@ -10,6 +10,7 @@ import { ThemeSupa } from "@supabase/auth-ui-shared";
  * - لو شغال لوكال: حط VITE_API_BASE=http://localhost:3001
  * - لو نفس الدومين (Render Serve static + API نفس السيرفيس): سيبه فاضي
  */
+
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
 function apiUrl(path) {
@@ -68,7 +69,118 @@ function safeText(v) {
   return String(v);
 }
 
-export default function App() {
+function makeId(prefix = "id") {
+  return (
+    prefix +
+    "_" +
+    Date.now().toString(36) +
+    "_" +
+    Math.random().toString(36).slice(2, 8)
+  );
+}
+
+function cartTotal(items) {
+  return items.reduce((s, it) => s + Number(it.price || 0), 0);
+}
+
+function prettyStatus(s) {
+  switch (s) {
+    case "new":
+      return "New";
+    case "in_progress":
+      return "In Progress";
+    case "delivering":
+      return "Delivering";
+    case "delivered":
+      return "Delivered";
+    default:
+      return safeText(s);
+  }
+}
+
+// اختياري: لون للستاتس (لو عندك CSS classes)
+function statusClass(s) {
+  switch (s) {
+    case "new":
+      return "apexStatusNew";
+    case "in_progress":
+      return "apexStatusProgress";
+    case "delivering":
+      return "apexStatusDelivering";
+    case "delivered":
+      return "apexStatusDelivered";
+    default:
+      return "";
+  }
+}
+
+/**
+ * صفحة callback بسيطة (بدون Router) عشان OAuth
+ * Supabase هيرجعك على: /#/auth/callback
+ */
+function AuthCallbackInline() {
+  const [msg, setMsg] = useState("Signing you in…");
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        // ده مهم عشان Supabase يقرأ الـ URL ويحفظ الـ session
+        const { data, error } = await supabase.auth.getSession();
+        if (error) console.warn("callback getSession error:", error);
+
+        if (!alive) return;
+
+        if (data?.session) {
+          setMsg("Signed in ✅ Redirecting…");
+        } else {
+          setMsg("No session found. Redirecting…");
+        }
+      } catch (e) {
+        console.warn("callback exception:", e);
+        if (alive) setMsg("Error during login. Redirecting…");
+      } finally {
+        // ارجع للـ Home
+        setTimeout(() => {
+          window.location.hash = "#/";
+        }, 400);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  return (
+    <div className="apexApp apexThemeDaily" style={{ minHeight: "100vh" }}>
+      <div style={{ padding: 24, color: "#fff" }}>
+        <div style={{ fontSize: 18, fontWeight: 800 }}>{msg}</div>
+        <div style={{ opacity: 0.75, marginTop: 8 }}>
+          Please wait a moment.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Wrapper عشان ما نكسرش Rules of Hooks:
+ * - لو callback: نعرض Callback component
+ * - غير كده: نعرض التطبيق الطبيعي
+ */
+function AppShell() {
+  const isCallback =
+    typeof window !== "undefined" &&
+    (window.location.hash.startsWith("#/auth/callback") ||
+      window.location.hash.startsWith("#auth/callback"));
+
+  if (isCallback) return <AuthCallbackInline />;
+  return <MainApp />;
+}
+
+function MainApp() {
   // Auth
   const [session, setSession] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
@@ -88,18 +200,29 @@ export default function App() {
   const [savedBlends, setSavedBlends] = useState([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
 
+  // Cart
+  const [cart, setCart] = useState([]);
+
+  // Checkout
+  const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
+  const [customerAddress, setCustomerAddress] = useState("");
+  const [customerNotes, setCustomerNotes] = useState("");
+
+  // Orders (client view)
+  const [orders, setOrders] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+  const [ordersErr, setOrdersErr] = useState("");
+
   const user = session?.user || null;
-  const canSave = Boolean(user && blend && Array.isArray(blend.recipe));
 
   const headline = useMemo(() => {
-    // الجمل اللي انت شايفها أحسن: تمام جدًا
     return {
       titleA: "Purebred Power.",
       titleB: "Pure Arabica.",
       subtitle:
         "AI-crafted blends based on your taste and routine. Your coffee. Your signature.",
-      micro:
-        "Your blend. Your identity. Crafted by AI, roasted by APEX.",
+      micro: "Your blend. Your identity. Crafted by AI, roasted by APEX.",
     };
   }, []);
 
@@ -123,13 +246,15 @@ export default function App() {
     };
   }, []);
 
-  // When user logs in, load their saved blends
+  // When user logs in, load saved blends + orders
   useEffect(() => {
     if (!user?.id) {
       setSavedBlends([]);
+      setOrders([]);
       return;
     }
     loadSavedBlends();
+    loadMyOrders();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
@@ -184,7 +309,7 @@ export default function App() {
         .from("saved_blends")
         .select("*")
         .order("created_at", { ascending: false })
-        .limit(20);
+        .limit(30);
 
       if (error) throw error;
       setSavedBlends(data || []);
@@ -209,12 +334,14 @@ export default function App() {
     try {
       const row = {
         user_id: user.id,
-        blend_name: safeText(blend.blend_name_suggestion || "APEX Custom Blend"),
         line,
         size_g: sizeG,
         preferences: prefs,
+        blend_name: String(blend.blend_name_suggestion || "APEX Custom Blend"),
+        why: String(blend.why || ""),
         recipe: blend.recipe,
         price: Number(blend.price || 0),
+        pricing: blend.pricing ?? null,
       };
 
       const { error } = await supabase.from("saved_blends").insert([row]);
@@ -229,8 +356,158 @@ export default function App() {
     }
   }
 
-  // Theme class: premium يغيّر الإضاءة كلها + يوضح الحصان
+  function addBlendToCartFromGenerated() {
+    if (!blend) return;
+
+    const item = {
+      id: makeId("cart"),
+      title: String(blend.blend_name_suggestion || "APEX Custom Blend"),
+      line: String(line || "daily"),
+      size_g: Number(sizeG || 250),
+      price: Number(blend.price || 0),
+      recipe: Array.isArray(blend.recipe) ? blend.recipe : [],
+    };
+
+    setCart((prev) => [item, ...prev]);
+  }
+
+  function addSavedBlendToCart(b) {
+    if (!b) return;
+
+    const item = {
+      id: makeId("cart"),
+      title: String(b.blend_name || "APEX Saved Blend"),
+      line: String(b.line || "daily"),
+      size_g: Number(b.size_g || 250),
+      price: Number(b.price || 0),
+      recipe: Array.isArray(b.recipe) ? b.recipe : [],
+    };
+
+    setCart((prev) => [item, ...prev]);
+  }
+
+  function removeCartItem(id) {
+    setCart((prev) => prev.filter((x) => x.id !== id));
+  }
+
+  function clearCart() {
+    setCart([]);
+  }
+
+  async function placeOrder() {
+    if (!user) {
+      setAuthOpen(true);
+      alert("Login required to place orders.");
+      return;
+    }
+    if (cart.length === 0) return;
+
+    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
+      alert("Please fill name, phone, address.");
+      return;
+    }
+
+    try {
+      const orderTotal = cartTotal(cart);
+
+      // 1) create order header
+      const { data: orderRow, error: orderErr } = await supabase
+        .from("orders")
+        .insert([
+          {
+            user_id: user.id,
+            status: "new", // ✅ New
+            payment: "COD",
+            customer_name: customerName.trim(),
+            customer_phone: customerPhone.trim(),
+            customer_address: customerAddress.trim(),
+            customer_notes: customerNotes.trim(),
+            currency: "EGP",
+            total: orderTotal,
+          },
+        ])
+        .select("id")
+        .single();
+
+      if (orderErr) throw orderErr;
+
+      const orderId = orderRow.id;
+
+      // 2) insert items
+      const items = cart.map((it) => ({
+        order_id: orderId,
+        title: it.title,
+        line: it.line,
+        size_g: it.size_g,
+        price: Number(it.price || 0),
+        recipe: it.recipe || [],
+      }));
+
+      const { error: itemsErr } = await supabase.from("order_items").insert(items);
+      if (itemsErr) throw itemsErr;
+
+      alert("Order placed ✅");
+
+      clearCart();
+      await loadMyOrders();
+    } catch (e) {
+      console.error(e);
+      alert(String(e?.message || e));
+    }
+  }
+
+  async function loadMyOrders() {
+    if (!user) return;
+
+    setOrdersErr("");
+    setLoadingOrders(true);
+    try {
+      const { data: ords, error: ordErr } = await supabase
+        .from("orders")
+        .select(
+          "id, created_at, status, payment, customer_name, customer_phone, customer_address, customer_notes, currency, total"
+        )
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (ordErr) throw ordErr;
+
+      const orderIds = (ords || []).map((o) => o.id);
+      let itemsByOrder = {};
+
+      if (orderIds.length) {
+        const { data: items, error: itemsErr } = await supabase
+          .from("order_items")
+          .select("id, order_id, title, line, size_g, price, recipe")
+          .in("order_id", orderIds);
+
+        if (itemsErr) throw itemsErr;
+
+        itemsByOrder = (items || []).reduce((acc, it) => {
+          acc[it.order_id] = acc[it.order_id] || [];
+          acc[it.order_id].push(it);
+          return acc;
+        }, {});
+      }
+
+      const merged = (ords || []).map((o) => ({
+        ...o,
+        items: itemsByOrder[o.id] || [],
+      }));
+
+      setOrders(merged);
+    } catch (e) {
+      setOrdersErr(String(e?.message || e));
+    } finally {
+      setLoadingOrders(false);
+    }
+  }
+
+  // Theme class: premium يغيّر الإضاءة كلها
   const themeClass = line === "premium" ? "apexThemePremium" : "apexThemeDaily";
+
+  // IMPORTANT: redirectTo لازم يبقى hash callback
+  const redirectTo = `${window.location.origin}/#/auth/callback`;
 
   return (
     <div className={`apexApp ${themeClass}`}>
@@ -249,6 +526,7 @@ export default function App() {
           >
             Admin
           </button>
+
           <button
             className="apexPillBtn"
             type="button"
@@ -287,7 +565,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Horse area */}
+          {/* Horse area (background image in CSS) */}
           <div className="apexHeroHorse" aria-hidden="true" />
         </div>
       </section>
@@ -299,9 +577,7 @@ export default function App() {
           <div className="apexCardHead">
             <div>
               <div className="apexCardTitle">Blend Builder</div>
-              <div className="apexCardSub">
-                Get the main recommendation, plus an alternative pick
-              </div>
+              <div className="apexCardSub">Generate the best blend for your identity</div>
             </div>
 
             <button
@@ -330,18 +606,14 @@ export default function App() {
               <div className="apexSeg">
                 <button
                   type="button"
-                  className={`apexSegBtn ${
-                    line === "daily" ? "isActive" : ""
-                  }`}
+                  className={`apexSegBtn ${line === "daily" ? "isActive" : ""}`}
                   onClick={() => setLine("daily")}
                 >
                   Daily (optimum)
                 </button>
                 <button
                   type="button"
-                  className={`apexSegBtn ${
-                    line === "premium" ? "isActive" : ""
-                  }`}
+                  className={`apexSegBtn ${line === "premium" ? "isActive" : ""}`}
                   onClick={() => setLine("premium")}
                 >
                   Premium (best taste)
@@ -369,9 +641,7 @@ export default function App() {
               <select
                 className="apexSelect"
                 value={prefs.method}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, method: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, method: e.target.value }))}
               >
                 {METHOD_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -387,9 +657,7 @@ export default function App() {
               <select
                 className="apexSelect"
                 value={prefs.strength}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, strength: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, strength: e.target.value }))}
               >
                 {STRENGTH_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -423,9 +691,7 @@ export default function App() {
               <select
                 className="apexSelect"
                 value={prefs.acidity}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, acidity: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, acidity: e.target.value }))}
               >
                 {ACIDITY_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -441,9 +707,7 @@ export default function App() {
               <select
                 className="apexSelect"
                 value={prefs.time}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, time: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, time: e.target.value }))}
               >
                 {TIME_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -459,9 +723,7 @@ export default function App() {
               <select
                 className="apexSelect"
                 value={prefs.milk}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, milk: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, milk: e.target.value }))}
               >
                 {MILK_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -474,17 +736,13 @@ export default function App() {
 
           <div className="apexHint">Craft a blend that feels like you.</div>
 
-          {/* Errors */}
           {blendErr ? <div className="apexError">{blendErr}</div> : null}
 
-          {/* Result */}
           {blend ? (
             <div className="apexResult">
               <div className="apexResultTop">
                 <div>
-                  <div className="apexBlendName">
-                    {safeText(blend.blend_name_suggestion)}
-                  </div>
+                  <div className="apexBlendName">{safeText(blend.blend_name_suggestion)}</div>
                   <div className="apexBlendWhy">{safeText(blend.why)}</div>
                 </div>
 
@@ -500,12 +758,8 @@ export default function App() {
                 {blend.recipe.map((r, idx) => (
                   <div className="apexRecipeRow" key={`${r.origin_code}-${idx}`}>
                     <div className="apexRecipeOrigin">
-                      <div className="apexRecipeName">
-                        {safeText(r.origin_name)}
-                      </div>
-                      <div className="apexRecipeCode">
-                        {safeText(r.origin_code)}
-                      </div>
+                      <div className="apexRecipeName">{safeText(r.origin_name)}</div>
+                      <div className="apexRecipeCode">{safeText(r.origin_code)}</div>
                     </div>
                     <div className="apexRecipeGrams">{Number(r.grams)}g</div>
                   </div>
@@ -522,6 +776,15 @@ export default function App() {
                   {saving ? "Saving..." : "Save Blend"}
                 </button>
 
+                <button
+                  className="apexPillBtn apexPillBtnGold"
+                  type="button"
+                  onClick={addBlendToCartFromGenerated}
+                  disabled={!blend}
+                >
+                  Add to Cart
+                </button>
+
                 <div className="apexSaveMeta">
                   {saveMsg
                     ? saveMsg
@@ -534,7 +797,7 @@ export default function App() {
           ) : null}
         </section>
 
-        {/* ===== Cart & Checkout (placeholder) ===== */}
+        {/* ===== Cart & Checkout ===== */}
         <section className="apexCard">
           <div className="apexCardHead">
             <div>
@@ -547,12 +810,50 @@ export default function App() {
           <div className="apexCardDivider" />
 
           <div className="apexCartBlock">
-            <div className="apexCartTitle">Cart</div>
-            <div className="apexCartEmpty">Empty</div>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <div className="apexCartTitle">Cart</div>
+              <button
+                className="apexPillBtn"
+                type="button"
+                onClick={clearCart}
+                disabled={cart.length === 0}
+              >
+                Clear
+              </button>
+            </div>
+
+            {cart.length === 0 ? (
+              <div className="apexCartEmpty">Empty</div>
+            ) : (
+              <div className="apexRecipeGrid" style={{ marginTop: 10 }}>
+                {cart.map((it) => (
+                  <div className="apexRecipeRow" key={it.id}>
+                    <div className="apexRecipeOrigin">
+                      <div className="apexRecipeName">{it.title}</div>
+                      <div className="apexRecipeCode">
+                        {String(it.line).toUpperCase()} • {Number(it.size_g)}g
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <div className="apexRecipeGrams">{Number(it.price)} EGP</div>
+                      <button
+                        className="apexModalClose"
+                        type="button"
+                        onClick={() => removeCartItem(it.id)}
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="apexTotalBox">
               <div className="apexTotalLabel">Total</div>
-              <div className="apexTotalValue">0 EGP</div>
+              <div className="apexTotalValue">{cartTotal(cart)} EGP</div>
             </div>
 
             <div className="apexCartTitle" style={{ marginTop: 14 }}>
@@ -560,24 +861,50 @@ export default function App() {
             </div>
 
             <div className="apexCheckoutGrid">
-              <input className="apexInput" placeholder="Customer name" />
-              <input className="apexInput" placeholder="01xxxxxxxxx" />
-              <input className="apexInput" placeholder="City, street, building..." />
-              <textarea className="apexTextarea" placeholder="Optional notes" />
+              <input
+                className="apexInput"
+                placeholder="Customer name"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+              />
+              <input
+                className="apexInput"
+                placeholder="01xxxxxxxxx"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+              />
+              <input
+                className="apexInput"
+                placeholder="City, street, building..."
+                value={customerAddress}
+                onChange={(e) => setCustomerAddress(e.target.value)}
+              />
+              <textarea
+                className="apexTextarea"
+                placeholder="Optional notes"
+                value={customerNotes}
+                onChange={(e) => setCustomerNotes(e.target.value)}
+              />
             </div>
 
-            <button className="apexBtnGold" type="button" style={{ marginTop: 12 }}>
+            <button
+              className="apexBtnGold"
+              type="button"
+              style={{ marginTop: 12 }}
+              onClick={placeOrder}
+              disabled={cart.length === 0}
+            >
               Place Order
             </button>
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
-              Orders are stored in <code>server/data/orders.json</code> (MVP)
+              Orders are saved with full details + items + recipe.
             </div>
           </div>
         </section>
       </main>
 
-      {/* ===== Saved blends (visible only when logged in) ===== */}
+      {/* ===== Saved blends ===== */}
       {user ? (
         <section className="apexSaved">
           <div className="apexSavedHead">
@@ -601,6 +928,97 @@ export default function App() {
                   <div className="apexSavedWhen">
                     {b.created_at ? new Date(b.created_at).toLocaleString() : ""}
                   </div>
+
+                  <button
+                    className="apexPillBtn apexPillBtnGold"
+                    type="button"
+                    style={{ marginTop: 10, width: "100%" }}
+                    onClick={() => addSavedBlendToCart(b)}
+                  >
+                    Add to Cart
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
+      {/* ===== My Orders ===== */}
+      {user ? (
+        <section className="apexSaved">
+          <div className="apexSavedHead">
+            <div className="apexSavedTitle">My Orders</div>
+            <button className="apexPillBtn" type="button" onClick={loadMyOrders}>
+              {loadingOrders ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {ordersErr ? <div className="apexError">{ordersErr}</div> : null}
+
+          {orders.length === 0 ? (
+            <div className="apexSavedEmpty">No orders yet.</div>
+          ) : (
+            <div className="apexSavedGrid">
+              {orders.map((o) => (
+                <div className="apexSavedCard" key={o.id}>
+                  <div className="apexSavedName">
+                    Order #{String(o.id).slice(0, 8).toUpperCase()}
+                  </div>
+
+                  <div className={`apexSavedMeta ${statusClass(o.status)}`}>
+                    {prettyStatus(o.status)} • {safeText(o.payment)} •{" "}
+                    {Number(o.total)} {safeText(o.currency || "EGP")}
+                  </div>
+
+                  <div className="apexSavedWhen">
+                    {o.created_at ? new Date(o.created_at).toLocaleString() : ""}
+                  </div>
+
+                  <div className="apexTinyNote" style={{ marginTop: 8 }}>
+                    <b>Name:</b> {safeText(o.customer_name)} <br />
+                    <b>Phone:</b> {safeText(o.customer_phone)} <br />
+                    <b>Address:</b> {safeText(o.customer_address)} <br />
+                    {o.customer_notes ? (
+                      <>
+                        <b>Notes:</b> {safeText(o.customer_notes)} <br />
+                      </>
+                    ) : null}
+                  </div>
+
+                  <div className="apexRecipeTitle" style={{ marginTop: 10 }}>
+                    Items
+                  </div>
+
+                  {o.items?.length ? (
+                    <div className="apexRecipeGrid" style={{ marginTop: 8 }}>
+                      {o.items.map((it) => (
+                        <div className="apexRecipeRow" key={it.id}>
+                          <div className="apexRecipeOrigin">
+                            <div className="apexRecipeName">{safeText(it.title)}</div>
+                            <div className="apexRecipeCode">
+                              {safeText(it.line).toUpperCase()} • {Number(it.size_g)}g
+                            </div>
+
+                            {Array.isArray(it.recipe) && it.recipe.length ? (
+                              <div className="apexTinyNote" style={{ marginTop: 6 }}>
+                                {it.recipe.map((r, idx) => (
+                                  <div key={idx}>
+                                    {safeText(r.origin_name || r.origin_code)}:{" "}
+                                    {Number(r.grams)}g
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+
+                          <div className="apexRecipeGrams">{Number(it.price)} EGP</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="apexSavedEmpty">No items found.</div>
+                  )}
                 </div>
               ))}
             </div>
@@ -611,16 +1029,10 @@ export default function App() {
       {/* ===== Auth Modal ===== */}
       {authOpen ? (
         <div className="apexModalOverlay" onMouseDown={() => setAuthOpen(false)}>
-          <div
-            className="apexModalCard"
-            onMouseDown={(e) => e.stopPropagation()}
-          >
+          <div className="apexModalCard" onMouseDown={(e) => e.stopPropagation()}>
             <div className="apexModalTop">
               <div className="apexModalTitle">{user ? "Account" : "Login"}</div>
-              <button
-                className="apexModalClose"
-                onClick={() => setAuthOpen(false)}
-              >
+              <button className="apexModalClose" type="button" onClick={() => setAuthOpen(false)}>
                 ✕
               </button>
             </div>
@@ -638,19 +1050,22 @@ export default function App() {
               <Auth
                 supabaseClient={supabase}
                 appearance={{ theme: ThemeSupa }}
-                providers={["google"]}   // شيل apple
-                redirectTo={window.location.origin}
+                providers={["google"]}
+                redirectTo={redirectTo}
                 theme="dark"
               />
-              
             )}
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
-              Email + Google/Apple works now. Phone OTP needs an SMS provider.
+              Email + Google works. Phone OTP needs an SMS provider.
             </div>
           </div>
         </div>
       ) : null}
     </div>
   );
+}
+
+export default function App() {
+  return <AppShell />;
 }
