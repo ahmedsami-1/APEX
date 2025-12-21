@@ -625,3 +625,18 @@ body{
     grid-template-columns: 1fr;
   }
 }
+.apexStatusNew {
+  color: #c9a24d;
+}
+
+.apexStatusProgress {
+  color: #ffb020;
+}
+
+.apexStatusDelivering {
+  color: #4da3ff;
+}
+
+.apexStatusDelivered {
+  color: #4caf50;
+}
