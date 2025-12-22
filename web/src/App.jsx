@@ -537,25 +537,11 @@ function AuthCallbackInline() {
 
     (async () => {
       try {
-        // ✅ handle both cases:
-        // 1) code in ?code=...
-        // 2) code inside hash (rare but happens with hash routers)
-        const url = new URL(window.location.href);
+        const url = window.location.href;
 
-        const codeFromSearch = url.searchParams.get("code");
-        const codeFromHash = (() => {
-          const h = window.location.hash || "";
-          const qIndex = h.indexOf("?");
-          if (qIndex === -1) return null;
-          const qs = new URLSearchParams(h.slice(qIndex + 1));
-          return qs.get("code");
-        })();
-
-        const code = codeFromSearch || codeFromHash;
-
-        if (code) {
-          setMsg("Exchanging code…");
-          const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+        // لو فيه code يبقى لازم exchange
+        if (url.includes("code=")) {
+          const { error } = await supabase.auth.exchangeCodeForSession(url);
           if (error) throw error;
         }
 
@@ -566,13 +552,12 @@ function AuthCallbackInline() {
         else setMsg("No session found. Redirecting…");
       } catch (e) {
         console.warn("callback exception:", e);
-        if (alive) setMsg("Login error. Redirecting…");
+        if (alive) setMsg(`Login error: ${e?.message || e}`);
       } finally {
+        // متستعجلش 400ms.. خليه ثانية عشان التخزين يثبت
         setTimeout(() => {
-          window.location.hash = "#/";
-          // لو هتستخدم /auth/callback بدون hash:
-          // window.location.href = "/";
-        }, 600);
+          window.location.href = "/#/";
+        }, 1000);
       }
     })();
 
@@ -590,6 +575,7 @@ function AuthCallbackInline() {
     </div>
   );
 }
+
 
 
 function AppShell() {

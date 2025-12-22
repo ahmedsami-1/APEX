@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>APEX Auth Callback</title>
+    <style>
+      body { background:#0b0b0f; color:#fff; font-family: system-ui; padding:24px; }
+      .sub { opacity:.7; margin-top:8px; }
+    </style>
+  </head>
+  <body>
+    <div style="font-size:18px;font-weight:800">Signing you in…</div>
+    <div class="sub">Please wait a moment.</div>
+
+    <script type="module">
+      // لازم تكون عندك env keys في build
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+      const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+      // lazy import من CDN لتفادي bundling issues
+      const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm");
+      const supabase = createClient(supabaseUrl, supabaseAnonKey);
+
+      try {
+        const url = window.location.href;
+
+        if (url.includes("code=")) {
+          const { error } = await supabase.auth.exchangeCodeForSession(url);
+          if (error) throw error;
+        }
+
+        // رجّعه للـ SPA
+        window.location.replace("/#/");
+      } catch (e) {
+        document.body.innerHTML = `
+          <div style="font-size:18px;font-weight:800">Login error</div>
+          <div class="sub">${(e && e.message) ? e.message : String(e)}</div>
+          <div class="sub" style="margin-top:12px">Try again from the home page.</div>
+        `;
+        setTimeout(() => window.location.replace("/#/"), 2000);
+      }
+    </script>
+  </body>
+</html>
