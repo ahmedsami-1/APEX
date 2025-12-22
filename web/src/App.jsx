@@ -69,13 +69,7 @@ function safeText(v) {
 }
 
 function makeId(prefix = "id") {
-  return (
-    prefix +
-    "_" +
-    Date.now().toString(36) +
-    "_" +
-    Math.random().toString(36).slice(2, 8)
-  );
+  return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
 }
 
 function cartTotal(items) {
@@ -126,7 +120,6 @@ function loadGoogleMapsOnce() {
   if (typeof window === "undefined") return Promise.reject(new Error("No window"));
   if (window.google?.maps) return Promise.resolve(window.google);
 
-  // Use a shared promise to avoid double loads
   if (window.__apex_gmaps_promise) return window.__apex_gmaps_promise;
 
   window.__apex_gmaps_promise = new Promise((resolve, reject) => {
@@ -160,7 +153,8 @@ function loadGoogleMapsOnce() {
  *   lng: number|null,
  *   address: string,
  *   maps_url: string|null,
- *   place_id: string|null
+ *   place_id: string|null,
+ *   mode: "current"|"custom"
  * }
  */
 function GoogleMapsPicker({ value, onChange }) {
@@ -174,17 +168,31 @@ function GoogleMapsPicker({ value, onChange }) {
 
   const [ready, setReady] = useState(false);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // UI mode
+  const [mode, setMode] = useState(value?.mode || "current"); // current | custom
+  const modeRef = useRef(value?.mode || "current"); // ✅ always up-to-date for listeners
+
+  // keep modeRef synced
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
+
+  // if parent value.mode changes (rare)
+  useEffect(() => {
+    if (value?.mode && value.mode !== mode) setMode(value.mode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value?.mode]);
 
   const defaultCenter = useMemo(() => {
-    // Cairo default (tweak as you want)
-    const fallback = { lat: 30.0444, lng: 31.2357 };
+    const fallback = { lat: 30.0444, lng: 31.2357 }; // Cairo default
     if (value?.lat && value?.lng) return { lat: Number(value.lat), lng: Number(value.lng) };
     return fallback;
   }, [value?.lat, value?.lng]);
 
   useEffect(() => {
     let alive = true;
-
     (async () => {
       try {
         setErr("");
@@ -196,19 +204,113 @@ function GoogleMapsPicker({ value, onChange }) {
         setErr(String(e?.message || e));
       }
     })();
-
     return () => {
       alive = false;
     };
   }, []);
 
-  // init map once
+  function buildMapsUrl(lat, lng) {
+    return `https://www.google.com/maps?q=${encodeURIComponent(Number(lat))},${encodeURIComponent(Number(lng))}`;
+  }
+
+  // ✅ main setter: always writes back {lat,lng,address,maps_url,place_id,mode}
+  function setPoint(lat, lng, opts = {}) {
+    const marker = markerRef.current;
+    const map = mapRef.current;
+    const geocoder = geocoderRef.current;
+
+    const pos = { lat: Number(lat), lng: Number(lng) };
+    const mapsUrl = buildMapsUrl(pos.lat, pos.lng);
+    const nextMode = opts.newMode || modeRef.current;
+
+    // marker + map
+    if (marker) {
+      marker.setVisible(true);
+      marker.setPosition(pos);
+      // draggable only in custom
+      marker.setDraggable(nextMode === "custom");
+    }
+    if (map) {
+      map.panTo(pos);
+      if (map.getZoom() < 15) map.setZoom(15);
+    }
+
+    // if address provided (autocomplete), use it directly
+    if (opts.address) {
+      onChange?.({
+        ...(value || {}),
+        lat: pos.lat,
+        lng: pos.lng,
+        address: String(opts.address || ""),
+        maps_url: mapsUrl,
+        place_id: opts.place_id ? String(opts.place_id) : null,
+        mode: nextMode,
+      });
+      return;
+    }
+
+    // reverse geocode to fill detected address
+    if (opts.preferReverse && geocoder) {
+      setBusy(true);
+
+      geocoder.geocode({ location: pos }, (results, status) => {
+        // status examples: OK, ZERO_RESULTS, OVER_QUERY_LIMIT, REQUEST_DENIED, INVALID_REQUEST
+        if (status !== "OK") {
+          console.warn("Geocoder status:", status, results);
+        }
+
+        const addr =
+          status === "OK" && results && results.length ? results[0].formatted_address : "";
+
+        const pid =
+          status === "OK" && results && results.length ? results[0].place_id || null : null;
+
+        // if REQUEST_DENIED -> show message (usually API restrictions)
+        if (status === "REQUEST_DENIED") {
+          setErr(
+            "Google reverse geocode denied. غالبًا لازم تفعّل Geocoding API أو تصلّح Restrict للـ Key (HTTP referrers/APIs)."
+          );
+        } else {
+          // clear old error if success/other
+          setErr("");
+        }
+
+        onChange?.({
+          ...(value || {}),
+          lat: pos.lat,
+          lng: pos.lng,
+          address: String(addr || (value?.address || "")),
+          maps_url: mapsUrl,
+          place_id: pid ? String(pid) : (value?.place_id || null),
+          mode: nextMode,
+        });
+
+        setBusy(false);
+      });
+
+      return;
+    }
+
+    // fallback
+    onChange?.({
+      ...(value || {}),
+      lat: pos.lat,
+      lng: pos.lng,
+      address: value?.address || "",
+      maps_url: mapsUrl,
+      place_id: value?.place_id || null,
+      mode: nextMode,
+    });
+  }
+
+  // init map ONCE (✅ listeners read modeRef.current)
   useEffect(() => {
     if (!ready) return;
     if (!mapDivRef.current) return;
     if (mapRef.current) return;
 
     const g = window.google;
+
     const map = new g.maps.Map(mapDivRef.current, {
       center: defaultCenter,
       zoom: 15,
@@ -219,31 +321,32 @@ function GoogleMapsPicker({ value, onChange }) {
     });
 
     mapRef.current = map;
-    markerRef.current = new g.maps.Marker({
-      map,
-      position: defaultCenter,
-      draggable: true,
-    });
-
     geocoderRef.current = new g.maps.Geocoder();
 
-    // if no value lat/lng, hide marker until user picks
+    const marker = new g.maps.Marker({
+      map,
+      position: defaultCenter,
+      draggable: modeRef.current === "custom",
+    });
+    markerRef.current = marker;
+
     if (!(value?.lat && value?.lng)) {
-      markerRef.current.setVisible(false);
+      marker.setVisible(false);
     }
 
-    // click to set pin
+    // click to set pin (only if custom)
     map.addListener("click", (e) => {
+      if (modeRef.current !== "custom") return;
       const lat = e.latLng.lat();
       const lng = e.latLng.lng();
-      setPoint(lat, lng, { preferReverse: true });
+      setPoint(lat, lng, { preferReverse: true, newMode: "custom" });
     });
 
-    // drag marker to update
-    markerRef.current.addListener("dragend", () => {
-      const pos = markerRef.current.getPosition();
+    marker.addListener("dragend", () => {
+      if (modeRef.current !== "custom") return;
+      const pos = marker.getPosition();
       if (!pos) return;
-      setPoint(pos.lat(), pos.lng(), { preferReverse: true });
+      setPoint(pos.lat(), pos.lng(), { preferReverse: true, newMode: "custom" });
     });
 
     // Autocomplete
@@ -260,19 +363,22 @@ function GoogleMapsPicker({ value, onChange }) {
 
         const lat = loc.lat();
         const lng = loc.lng();
-
         const addr = place.formatted_address || place.name || "";
         const pid = place.place_id || null;
+
+        // selecting a place means custom
+        setMode("custom");
+        modeRef.current = "custom";
 
         setPoint(lat, lng, {
           address: addr,
           place_id: pid,
           preferReverse: false,
+          newMode: "custom",
         });
       });
     }
 
-    // cleanup
     return () => {
       try {
         mapRef.current = null;
@@ -284,7 +390,16 @@ function GoogleMapsPicker({ value, onChange }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
-  // update map when external value changes (e.g. loaded order)
+  // when mode changes: update marker draggable immediately
+  useEffect(() => {
+    const marker = markerRef.current;
+    if (marker) marker.setDraggable(mode === "custom");
+    // also persist mode into parent value
+    onChange?.({ ...(value || {}), mode });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  // update map when external value changes
   useEffect(() => {
     const map = mapRef.current;
     const marker = markerRef.current;
@@ -300,105 +415,40 @@ function GoogleMapsPicker({ value, onChange }) {
     }
   }, [value?.lat, value?.lng]);
 
-  function buildMapsUrl(lat, lng) {
-    return `https://www.google.com/maps?q=${encodeURIComponent(Number(lat))},${encodeURIComponent(
-      Number(lng)
-    )}`;
-  }
-
-  function setPoint(lat, lng, opts = {}) {
-    const marker = markerRef.current;
-    const map = mapRef.current;
-
-    const pos = { lat: Number(lat), lng: Number(lng) };
-    if (marker) {
-      marker.setVisible(true);
-      marker.setPosition(pos);
-    }
-    if (map) {
-      map.panTo(pos);
-      if (map.getZoom() < 15) map.setZoom(15);
-    }
-
-    const mapsUrl = buildMapsUrl(pos.lat, pos.lng);
-
-    // If address explicitly provided (from autocomplete), use it.
-    if (opts.address) {
-      onChange?.({
-        ...(value || {}),
-        lat: pos.lat,
-        lng: pos.lng,
-        address: String(opts.address || ""),
-        maps_url: mapsUrl,
-        place_id: opts.place_id ? String(opts.place_id) : null,
-      });
-      return;
-    }
-
-    // Otherwise reverse geocode for a nice formatted address
-    if (opts.preferReverse) {
-      const geocoder = geocoderRef.current;
-      if (!geocoder) {
-        onChange?.({
-          ...(value || {}),
-          lat: pos.lat,
-          lng: pos.lng,
-          address: value?.address || "",
-          maps_url: mapsUrl,
-          place_id: value?.place_id || null,
-        });
-        return;
-      }
-
-      geocoder.geocode({ location: pos }, (results, status) => {
-        const addr =
-          status === "OK" && results && results.length
-            ? results[0].formatted_address
-            : value?.address || "";
-
-        const pid =
-          status === "OK" && results && results.length
-            ? results[0].place_id || value?.place_id || null
-            : value?.place_id || null;
-
-        onChange?.({
-          ...(value || {}),
-          lat: pos.lat,
-          lng: pos.lng,
-          address: String(addr || ""),
-          maps_url: mapsUrl,
-          place_id: pid ? String(pid) : null,
-        });
-      });
-      return;
-    }
-
-    // fallback
-    onChange?.({
-      ...(value || {}),
-      lat: pos.lat,
-      lng: pos.lng,
-      address: value?.address || "",
-      maps_url: mapsUrl,
-      place_id: value?.place_id || null,
-    });
-  }
-
   function useMyLocation() {
     if (!navigator.geolocation) {
       alert("Geolocation is not supported in this browser.");
       return;
     }
 
+    setErr("");
+    setBusy(true);
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setPoint(pos.coords.latitude, pos.coords.longitude, { preferReverse: true });
+        // current mode
+        setMode("current");
+        modeRef.current = "current";
+
+        // force reverse geocode to fill address
+        setPoint(pos.coords.latitude, pos.coords.longitude, {
+          preferReverse: true,
+          newMode: "current",
+        });
       },
       (e) => {
+        setBusy(false);
         alert("Could not get location: " + (e?.message || "Unknown error"));
       },
-      { enableHighAccuracy: true, timeout: 8000 }
+      { enableHighAccuracy: true, timeout: 12000 }
     );
+  }
+
+  function deliverToAnotherLocation() {
+    setErr("");
+    setMode("custom");
+    modeRef.current = "custom";
+    // tip: if no pin yet, keep map centered; user will click
   }
 
   function openGoogleMapsAtPin() {
@@ -419,21 +469,22 @@ function GoogleMapsPicker({ value, onChange }) {
       {err ? <div className="apexError">{err}</div> : null}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button className="apexPillBtn apexPillBtnGold" type="button" onClick={useMyLocation}>
-          Use my current location
+        <button className="apexPillBtn apexPillBtnGold" type="button" onClick={useMyLocation} disabled={busy}>
+          {busy && mode === "current" ? "Detecting..." : "My current location"}
         </button>
 
-        <button
-          className="apexPillBtn"
-          type="button"
-          onClick={openGoogleMapsAtPin}
-          disabled={!value?.lat || !value?.lng}
-        >
+        <button className="apexPillBtn" type="button" onClick={deliverToAnotherLocation} disabled={busy}>
+          Deliver to another location
+        </button>
+
+        <button className="apexPillBtn" type="button" onClick={openGoogleMapsAtPin} disabled={!value?.lat || !value?.lng}>
           Open in Google Maps
         </button>
 
         <div className="apexTinyNote" style={{ opacity: 0.85 }}>
-          ابحث ثم اختار، أو اضغط على الخريطة لتحط Pin.
+          {mode === "custom"
+            ? "ابحث أو اضغط على الخريطة لتحط Pin (وتقدر تسحبه)"
+            : "هيجيب عنوانك من جوجل تلقائيًا"}
         </div>
       </div>
 
@@ -442,6 +493,7 @@ function GoogleMapsPicker({ value, onChange }) {
         className="apexInput"
         placeholder="Search on Google Maps (luxury)"
         defaultValue=""
+        disabled={!ready || busy}
       />
 
       <div
@@ -457,14 +509,9 @@ function GoogleMapsPicker({ value, onChange }) {
 
       <input
         className="apexInput"
-        placeholder="Detected address (you can edit)"
+        placeholder="Detected address (auto from Google) — you can edit"
         value={value?.address || ""}
-        onChange={(e) =>
-          onChange?.({
-            ...(value || {}),
-            address: e.target.value,
-          })
-        }
+        onChange={(e) => onChange?.({ ...(value || {}), address: e.target.value })}
       />
 
       {value?.lat && value?.lng ? (
@@ -472,9 +519,7 @@ function GoogleMapsPicker({ value, onChange }) {
           lat: {Number(value.lat).toFixed(6)} | lng: {Number(value.lng).toFixed(6)}
         </div>
       ) : (
-        <div className="apexTinyNote" style={{ opacity: 0.75 }}>
-          No location selected yet.
-        </div>
+        <div className="apexTinyNote" style={{ opacity: 0.75 }}>No location selected yet.</div>
       )}
     </div>
   );
@@ -492,19 +537,42 @@ function AuthCallbackInline() {
 
     (async () => {
       try {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) console.warn("callback getSession error:", error);
+        // ✅ handle both cases:
+        // 1) code in ?code=...
+        // 2) code inside hash (rare but happens with hash routers)
+        const url = new URL(window.location.href);
+
+        const codeFromSearch = url.searchParams.get("code");
+        const codeFromHash = (() => {
+          const h = window.location.hash || "";
+          const qIndex = h.indexOf("?");
+          if (qIndex === -1) return null;
+          const qs = new URLSearchParams(h.slice(qIndex + 1));
+          return qs.get("code");
+        })();
+
+        const code = codeFromSearch || codeFromHash;
+
+        if (code) {
+          setMsg("Exchanging code…");
+          const { error } = await supabase.auth.exchangeCodeForSession(window.location.href);
+          if (error) throw error;
+        }
+
+        const { data } = await supabase.auth.getSession();
         if (!alive) return;
 
         if (data?.session) setMsg("Signed in ✅ Redirecting…");
         else setMsg("No session found. Redirecting…");
       } catch (e) {
         console.warn("callback exception:", e);
-        if (alive) setMsg("Error during login. Redirecting…");
+        if (alive) setMsg("Login error. Redirecting…");
       } finally {
         setTimeout(() => {
           window.location.hash = "#/";
-        }, 400);
+          // لو هتستخدم /auth/callback بدون hash:
+          // window.location.href = "/";
+        }, 600);
       }
     })();
 
@@ -523,15 +591,20 @@ function AuthCallbackInline() {
   );
 }
 
+
 function AppShell() {
-  const isCallback =
+  const path = typeof window !== "undefined" ? window.location.pathname : "";
+  const isCallbackPath = path === "/auth/callback";
+
+  const isCallbackHash =
     typeof window !== "undefined" &&
     (window.location.hash.startsWith("#/auth/callback") ||
       window.location.hash.startsWith("#auth/callback"));
 
-  if (isCallback) return <AuthCallbackInline />;
+  if (isCallbackPath || isCallbackHash) return <AuthCallbackInline />;
   return <MainApp />;
 }
+
 
 function MainApp() {
   // Auth
@@ -569,6 +642,7 @@ function MainApp() {
     address: "",
     maps_url: null,
     place_id: null,
+    mode: "current", // NEW
   });
 
   // Orders (client view)
@@ -756,86 +830,128 @@ function MainApp() {
   }
 
   async function placeOrder() {
-    if (!user) {
-      setAuthOpen(true);
-      alert("Login required to place orders.");
-      return;
-    }
-    if (cart.length === 0) return;
-
-    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
-      alert("Please fill name, phone, address.");
-      return;
-    }
-
-    // Require map pin
-    if (!location?.lat || !location?.lng) {
-      alert("Please pick delivery location on the map.");
-      return;
-    }
-
-    try {
-      const orderTotal = cartTotal(cart);
-
-      const mapsUrl =
-        location?.lat && location?.lng
-          ? `https://www.google.com/maps?q=${encodeURIComponent(Number(location.lat))},${encodeURIComponent(
-              Number(location.lng)
-            )}`
-          : null;
-
-      // 1) create order header
-      const { data: orderRow, error: orderErr } = await supabase
-        .from("orders")
-        .insert([
-          {
-            user_id: user.id,
-            status: "new",
-            payment: "COD",
-            customer_name: customerName.trim(),
-            customer_phone: customerPhone.trim(),
-            customer_address: customerAddress.trim(),
-            customer_notes: customerNotes.trim(),
-            currency: "EGP",
-            total: orderTotal,
-
-            // location (Google Maps)
-            location_lat: Number(location.lat),
-            location_lng: Number(location.lng),
-            location_address: location.address ? String(location.address) : null,
-            location_maps_url: location.maps_url ? String(location.maps_url) : mapsUrl,
-            location_place_id: location.place_id ? String(location.place_id) : null,
-          },
-        ])
-        .select("id")
-        .single();
-
-      if (orderErr) throw orderErr;
-
-      const orderId = orderRow.id;
-
-      // 2) insert items
-      const items = cart.map((it) => ({
-        order_id: orderId,
-        title: it.title,
-        line: it.line,
-        size_g: it.size_g,
-        price: Number(it.price || 0),
-        recipe: it.recipe || [],
-      }));
-
-      const { error: itemsErr } = await supabase.from("order_items").insert(items);
-      if (itemsErr) throw itemsErr;
-
-      alert("Order placed ✅");
-
-      clearCart();
-      await loadMyOrders();
-    } catch (e) {
-      console.error(e);
-      alert(String(e?.message || e));
-    }
+  if (!user) {
+    setAuthOpen(true);
+    alert("Login required to place orders.");
+    return;
   }
+  if (cart.length === 0) return;
+
+  if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
+    alert("Please fill name, phone, address.");
+    return;
+  }
+
+  if (!location?.lat || !location?.lng) {
+    alert("Please pick delivery location on the map.");
+    return;
+  }
+
+  try {
+    const orderTotal = cartTotal(cart);
+
+    const fallbackMapsUrl =
+      location?.lat && location?.lng
+        ? `https://www.google.com/maps?q=${encodeURIComponent(Number(location.lat))},${encodeURIComponent(
+            Number(location.lng)
+          )}`
+        : null;
+
+    // === snapshot of all choices at checkout ===
+    const preferencesSnapshot = {
+      line,
+      size_g: sizeG,
+      method: prefs?.method,
+      strength: prefs?.strength,
+      flavor_direction: prefs?.flavor_direction,
+      acidity: prefs?.acidity,
+      time: prefs?.time,
+      milk: prefs?.milk,
+    };
+
+    // === snapshot of location (for debugging/audit) ===
+    const locationSnapshot = {
+      lat: Number(location.lat),
+      lng: Number(location.lng),
+      address: location.address || "",
+      maps_url: location.maps_url || fallbackMapsUrl,
+      place_id: location.place_id || null,
+
+      // optional extra fields if you store them later
+      mode: location.mode || null, // "current" | "custom" (if you add it in UI)
+      source: location.source || "google_maps", // just a tag
+      captured_at: new Date().toISOString(),
+    };
+
+    // Decide mode (best effort)
+    const locationMode = location?.mode === "current" ? "current" : "custom";
+
+    // 1) create order header
+    const { data: orderRow, error: orderErr } = await supabase
+      .from("orders")
+      .insert([
+        {
+          user_id: user.id,
+          status: "new",
+          payment: "COD",
+          customer_name: customerName.trim(),
+          customer_phone: customerPhone.trim(),
+          customer_address: customerAddress.trim(),
+          customer_notes: customerNotes.trim(),
+          currency: "EGP",
+          total: orderTotal,
+
+          // snapshot
+          preferences: preferencesSnapshot,
+
+          // location (Google Maps)
+          location_mode: locationMode,
+          location_lat: Number(location.lat),
+          location_lng: Number(location.lng),
+          location_address: location.address ? String(location.address) : null,
+          location_maps_url: location.maps_url ? String(location.maps_url) : fallbackMapsUrl,
+          location_place_id: location.place_id ? String(location.place_id) : null,
+          location_snapshot: locationSnapshot,
+        },
+      ])
+      .select("id")
+      .single();
+
+    if (orderErr) throw orderErr;
+
+    const orderId = orderRow.id;
+
+    // 2) insert items (include meta snapshot too)
+    const items = cart.map((it) => ({
+      order_id: orderId,
+      title: it.title,
+      line: it.line,
+      size_g: it.size_g,
+      price: Number(it.price || 0),
+      recipe: it.recipe || [],
+      meta: {
+        // keep anything useful
+        cart_item_id: it.id,
+        created_from: "cart",
+        pricing: it.pricing ?? null,
+        why: it.why ?? null,
+        notes: it.notes ?? null,
+      },
+    }));
+
+    const { error: itemsErr } = await supabase.from("order_items").insert(items);
+    if (itemsErr) throw itemsErr;
+
+    alert("Order placed ✅");
+
+    clearCart();
+    await loadMyOrders();
+  } catch (e) {
+    console.error(e);
+    alert(String(e?.message || e));
+  }
+}
+
 
   async function loadMyOrders() {
     if (!user) return;
@@ -885,7 +1001,7 @@ function MainApp() {
   }
 
   const themeClass = line === "premium" ? "apexThemePremium" : "apexThemeDaily";
-  const redirectTo = `${window.location.origin}/#/auth/callback`;
+  const redirectTo = `${window.location.origin}/auth/callback`;
 
   return (
     <div className={`apexApp ${themeClass}`}>
@@ -962,18 +1078,10 @@ function MainApp() {
             <div className="apexField">
               <div className="apexLabel">Line</div>
               <div className="apexSeg">
-                <button
-                  type="button"
-                  className={`apexSegBtn ${line === "daily" ? "isActive" : ""}`}
-                  onClick={() => setLine("daily")}
-                >
+                <button type="button" className={`apexSegBtn ${line === "daily" ? "isActive" : ""}`} onClick={() => setLine("daily")}>
                   Daily (optimum)
                 </button>
-                <button
-                  type="button"
-                  className={`apexSegBtn ${line === "premium" ? "isActive" : ""}`}
-                  onClick={() => setLine("premium")}
-                >
+                <button type="button" className={`apexSegBtn ${line === "premium" ? "isActive" : ""}`} onClick={() => setLine("premium")}>
                   Premium (best taste)
                 </button>
               </div>
@@ -992,9 +1100,7 @@ function MainApp() {
               <div className="apexLabel">Brew method</div>
               <select className="apexSelect" value={prefs.method} onChange={(e) => setPrefs((p) => ({ ...p, method: e.target.value }))}>
                 {METHOD_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>
-                    {o.label}
-                  </option>
+                  <option key={o.v} value={o.v}>{o.label}</option>
                 ))}
               </select>
             </div>
@@ -1003,24 +1109,16 @@ function MainApp() {
               <div className="apexLabel">Strength</div>
               <select className="apexSelect" value={prefs.strength} onChange={(e) => setPrefs((p) => ({ ...p, strength: e.target.value }))}>
                 {STRENGTH_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>
-                    {o.label}
-                  </option>
+                  <option key={o.v} value={o.v}>{o.label}</option>
                 ))}
               </select>
             </div>
 
             <div className="apexField">
               <div className="apexLabel">Flavor direction</div>
-              <select
-                className="apexSelect"
-                value={prefs.flavor_direction}
-                onChange={(e) => setPrefs((p) => ({ ...p, flavor_direction: e.target.value }))}
-              >
+              <select className="apexSelect" value={prefs.flavor_direction} onChange={(e) => setPrefs((p) => ({ ...p, flavor_direction: e.target.value }))}>
                 {FLAVOR_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>
-                    {o.label}
-                  </option>
+                  <option key={o.v} value={o.v}>{o.label}</option>
                 ))}
               </select>
             </div>
@@ -1029,9 +1127,7 @@ function MainApp() {
               <div className="apexLabel">Acidity</div>
               <select className="apexSelect" value={prefs.acidity} onChange={(e) => setPrefs((p) => ({ ...p, acidity: e.target.value }))}>
                 {ACIDITY_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>
-                    {o.label}
-                  </option>
+                  <option key={o.v} value={o.v}>{o.label}</option>
                 ))}
               </select>
             </div>
@@ -1040,9 +1136,7 @@ function MainApp() {
               <div className="apexLabel">Time</div>
               <select className="apexSelect" value={prefs.time} onChange={(e) => setPrefs((p) => ({ ...p, time: e.target.value }))}>
                 {TIME_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>
-                    {o.label}
-                  </option>
+                  <option key={o.v} value={o.v}>{o.label}</option>
                 ))}
               </select>
             </div>
@@ -1051,9 +1145,7 @@ function MainApp() {
               <div className="apexLabel">Milk</div>
               <select className="apexSelect" value={prefs.milk} onChange={(e) => setPrefs((p) => ({ ...p, milk: e.target.value }))}>
                 {MILK_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>
-                    {o.label}
-                  </option>
+                  <option key={o.v} value={o.v}>{o.label}</option>
                 ))}
               </select>
             </div>
@@ -1207,12 +1299,7 @@ function MainApp() {
                   </div>
                   <div className="apexSavedWhen">{b.created_at ? new Date(b.created_at).toLocaleString() : ""}</div>
 
-                  <button
-                    className="apexPillBtn apexPillBtnGold"
-                    type="button"
-                    style={{ marginTop: 10, width: "100%" }}
-                    onClick={() => addSavedBlendToCart(b)}
-                  >
+                  <button className="apexPillBtn apexPillBtnGold" type="button" style={{ marginTop: 10, width: "100%" }} onClick={() => addSavedBlendToCart(b)}>
                     Add to Cart
                   </button>
                 </div>
@@ -1277,9 +1364,7 @@ function MainApp() {
                     ) : null}
                   </div>
 
-                  <div className="apexRecipeTitle" style={{ marginTop: 10 }}>
-                    Items
-                  </div>
+                  <div className="apexRecipeTitle" style={{ marginTop: 10 }}>Items</div>
 
                   {o.items?.length ? (
                     <div className="apexRecipeGrid" style={{ marginTop: 8 }}>
@@ -1337,13 +1422,7 @@ function MainApp() {
                 </button>
               </div>
             ) : (
-              <Auth
-                supabaseClient={supabase}
-                appearance={{ theme: ThemeSupa }}
-                providers={["google"]}
-                redirectTo={redirectTo}
-                theme="dark"
-              />
+              <Auth supabaseClient={supabase} appearance={{ theme: ThemeSupa }} providers={["google"]} redirectTo={redirectTo} theme="dark" />
             )}
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
