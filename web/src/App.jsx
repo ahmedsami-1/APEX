@@ -5,20 +5,6 @@ import { supabase } from "./supabaseClient";
 import { Auth } from "@supabase/auth-ui-react";
 import { ThemeSupa } from "@supabase/auth-ui-shared";
 
-// ===== Leaflet (Free map) =====
-import "leaflet/dist/leaflet.css";
-import L from "leaflet";
-
-/**
- * Fix Leaflet marker icons for Vite/React builds
- */
-delete L.Icon.Default.prototype._getIconUrl;
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
-});
-
 /**
  * API base:
  * - لو شغال لوكال: حط VITE_API_BASE=http://localhost:3001
@@ -126,131 +112,290 @@ function statusClass(s) {
   }
 }
 
-/**
- * ===== FREE reverse geocode (OpenStreetMap Nominatim) =====
- * (free, but respect rate limits)
- */
-async function reverseGeocodeFree(lat, lng) {
-  try {
-    const url =
-      "https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=" +
-      encodeURIComponent(lat) +
-      "&lon=" +
-      encodeURIComponent(lng);
+/* =========================
+   Google Maps (Luxury Picker)
+   ========================= */
 
-    const res = await fetch(url, { headers: { Accept: "application/json" } });
-    const data = await res.json().catch(() => ({}));
-    return data?.display_name || "";
-  } catch {
-    return "";
-  }
+// Put this in web/.env:
+// VITE_GOOGLE_MAPS_API_KEY=YOUR_KEY
+const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
+
+/** Load Google Maps JS API (no external npm deps) */
+function loadGoogleMapsOnce() {
+  if (!GMAPS_KEY) return Promise.reject(new Error("Missing VITE_GOOGLE_MAPS_API_KEY"));
+  if (typeof window === "undefined") return Promise.reject(new Error("No window"));
+  if (window.google?.maps) return Promise.resolve(window.google);
+
+  // Use a shared promise to avoid double loads
+  if (window.__apex_gmaps_promise) return window.__apex_gmaps_promise;
+
+  window.__apex_gmaps_promise = new Promise((resolve, reject) => {
+    const existing = document.querySelector("script[data-apex-gmaps='1']");
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.google));
+      existing.addEventListener("error", () => reject(new Error("Failed to load Google Maps")));
+      return;
+    }
+
+    const s = document.createElement("script");
+    s.src =
+      "https://maps.googleapis.com/maps/api/js?key=" +
+      encodeURIComponent(GMAPS_KEY) +
+      "&libraries=places";
+    s.async = true;
+    s.defer = true;
+    s.setAttribute("data-apex-gmaps", "1");
+    s.onload = () => resolve(window.google);
+    s.onerror = () => reject(new Error("Failed to load Google Maps"));
+    document.head.appendChild(s);
+  });
+
+  return window.__apex_gmaps_promise;
 }
 
 /**
- * ===== LeafletMapPicker (NO react-leaflet) =====
- * value: {lat,lng,address,maps_url}
+ * value shape:
+ * {
+ *   lat: number|null,
+ *   lng: number|null,
+ *   address: string,
+ *   maps_url: string|null,
+ *   place_id: string|null
+ * }
  */
-function LeafletMapPicker({ value, onChange }) {
+function GoogleMapsPicker({ value, onChange }) {
   const mapDivRef = useRef(null);
   const mapRef = useRef(null);
   const markerRef = useRef(null);
+  const geocoderRef = useRef(null);
 
-  const initialCenter = useMemo(() => {
-    if (value?.lat && value?.lng) return [value.lat, value.lng];
-    return [30.0444, 31.2357]; // Cairo default
+  const inputRef = useRef(null);
+  const autoRef = useRef(null);
+
+  const [ready, setReady] = useState(false);
+  const [err, setErr] = useState("");
+
+  const defaultCenter = useMemo(() => {
+    // Cairo default (tweak as you want)
+    const fallback = { lat: 30.0444, lng: 31.2357 };
+    if (value?.lat && value?.lng) return { lat: Number(value.lat), lng: Number(value.lng) };
+    return fallback;
   }, [value?.lat, value?.lng]);
 
   useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      try {
+        setErr("");
+        await loadGoogleMapsOnce();
+        if (!alive) return;
+        setReady(true);
+      } catch (e) {
+        if (!alive) return;
+        setErr(String(e?.message || e));
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // init map once
+  useEffect(() => {
+    if (!ready) return;
     if (!mapDivRef.current) return;
     if (mapRef.current) return;
 
-    const map = L.map(mapDivRef.current, {
-      center: initialCenter,
+    const g = window.google;
+    const map = new g.maps.Map(mapDivRef.current, {
+      center: defaultCenter,
       zoom: 15,
-      zoomControl: true,
-    });
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
-    }).addTo(map);
-
-    map.on("click", async (e) => {
-      const lat = e.latlng.lat;
-      const lng = e.latlng.lng;
-
-      if (!markerRef.current) {
-        markerRef.current = L.marker([lat, lng]).addTo(map);
-      } else {
-        markerRef.current.setLatLng([lat, lng]);
-      }
-
-      const addr = await reverseGeocodeFree(lat, lng);
-      onChange?.({
-        ...(value || {}),
-        lat,
-        lng,
-        address: addr || (value?.address || ""),
-      });
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: false,
+      clickableIcons: false,
     });
 
     mapRef.current = map;
+    markerRef.current = new g.maps.Marker({
+      map,
+      position: defaultCenter,
+      draggable: true,
+    });
 
+    geocoderRef.current = new g.maps.Geocoder();
+
+    // if no value lat/lng, hide marker until user picks
+    if (!(value?.lat && value?.lng)) {
+      markerRef.current.setVisible(false);
+    }
+
+    // click to set pin
+    map.addListener("click", (e) => {
+      const lat = e.latLng.lat();
+      const lng = e.latLng.lng();
+      setPoint(lat, lng, { preferReverse: true });
+    });
+
+    // drag marker to update
+    markerRef.current.addListener("dragend", () => {
+      const pos = markerRef.current.getPosition();
+      if (!pos) return;
+      setPoint(pos.lat(), pos.lng(), { preferReverse: true });
+    });
+
+    // Autocomplete
+    if (inputRef.current) {
+      autoRef.current = new g.maps.places.Autocomplete(inputRef.current, {
+        fields: ["geometry", "formatted_address", "place_id", "name"],
+        types: ["geocode"],
+      });
+
+      autoRef.current.addListener("place_changed", () => {
+        const place = autoRef.current.getPlace();
+        const loc = place?.geometry?.location;
+        if (!loc) return;
+
+        const lat = loc.lat();
+        const lng = loc.lng();
+
+        const addr = place.formatted_address || place.name || "";
+        const pid = place.place_id || null;
+
+        setPoint(lat, lng, {
+          address: addr,
+          place_id: pid,
+          preferReverse: false,
+        });
+      });
+    }
+
+    // cleanup
     return () => {
       try {
-        map.off();
-        map.remove();
+        mapRef.current = null;
+        markerRef.current = null;
+        geocoderRef.current = null;
+        autoRef.current = null;
       } catch {}
-      mapRef.current = null;
-      markerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [ready]);
 
+  // update map when external value changes (e.g. loaded order)
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
+    const marker = markerRef.current;
+    if (!map || !marker) return;
 
     if (value?.lat && value?.lng) {
       const lat = Number(value.lat);
       const lng = Number(value.lng);
-      const ll = [lat, lng];
-
-      if (!markerRef.current) {
-        markerRef.current = L.marker(ll).addTo(map);
-      } else {
-        markerRef.current.setLatLng(ll);
-      }
-
-      // move view nicely
-      map.setView(ll, Math.max(map.getZoom(), 15), { animate: true });
+      const pos = { lat, lng };
+      marker.setVisible(true);
+      marker.setPosition(pos);
+      map.panTo(pos);
     }
   }, [value?.lat, value?.lng]);
 
-  async function useMyLocation() {
+  function buildMapsUrl(lat, lng) {
+    return `https://www.google.com/maps?q=${encodeURIComponent(Number(lat))},${encodeURIComponent(
+      Number(lng)
+    )}`;
+  }
+
+  function setPoint(lat, lng, opts = {}) {
+    const marker = markerRef.current;
+    const map = mapRef.current;
+
+    const pos = { lat: Number(lat), lng: Number(lng) };
+    if (marker) {
+      marker.setVisible(true);
+      marker.setPosition(pos);
+    }
+    if (map) {
+      map.panTo(pos);
+      if (map.getZoom() < 15) map.setZoom(15);
+    }
+
+    const mapsUrl = buildMapsUrl(pos.lat, pos.lng);
+
+    // If address explicitly provided (from autocomplete), use it.
+    if (opts.address) {
+      onChange?.({
+        ...(value || {}),
+        lat: pos.lat,
+        lng: pos.lng,
+        address: String(opts.address || ""),
+        maps_url: mapsUrl,
+        place_id: opts.place_id ? String(opts.place_id) : null,
+      });
+      return;
+    }
+
+    // Otherwise reverse geocode for a nice formatted address
+    if (opts.preferReverse) {
+      const geocoder = geocoderRef.current;
+      if (!geocoder) {
+        onChange?.({
+          ...(value || {}),
+          lat: pos.lat,
+          lng: pos.lng,
+          address: value?.address || "",
+          maps_url: mapsUrl,
+          place_id: value?.place_id || null,
+        });
+        return;
+      }
+
+      geocoder.geocode({ location: pos }, (results, status) => {
+        const addr =
+          status === "OK" && results && results.length
+            ? results[0].formatted_address
+            : value?.address || "";
+
+        const pid =
+          status === "OK" && results && results.length
+            ? results[0].place_id || value?.place_id || null
+            : value?.place_id || null;
+
+        onChange?.({
+          ...(value || {}),
+          lat: pos.lat,
+          lng: pos.lng,
+          address: String(addr || ""),
+          maps_url: mapsUrl,
+          place_id: pid ? String(pid) : null,
+        });
+      });
+      return;
+    }
+
+    // fallback
+    onChange?.({
+      ...(value || {}),
+      lat: pos.lat,
+      lng: pos.lng,
+      address: value?.address || "",
+      maps_url: mapsUrl,
+      place_id: value?.place_id || null,
+    });
+  }
+
+  function useMyLocation() {
     if (!navigator.geolocation) {
       alert("Geolocation is not supported in this browser.");
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-
-        const map = mapRef.current;
-        if (map) map.setView([lat, lng], 16, { animate: true });
-
-        const addr = await reverseGeocodeFree(lat, lng);
-
-        onChange?.({
-          ...(value || {}),
-          lat,
-          lng,
-          address: addr || (value?.address || ""),
-        });
+      (pos) => {
+        setPoint(pos.coords.latitude, pos.coords.longitude, { preferReverse: true });
       },
-      (err) => {
-        alert("Could not get location: " + (err?.message || "Unknown error"));
+      (e) => {
+        alert("Could not get location: " + (e?.message || "Unknown error"));
       },
       { enableHighAccuracy: true, timeout: 8000 }
     );
@@ -258,35 +403,55 @@ function LeafletMapPicker({ value, onChange }) {
 
   function openGoogleMapsAtPin() {
     if (!value?.lat || !value?.lng) return;
-    const url = `https://www.google.com/maps?q=${encodeURIComponent(
-      Number(value.lat)
-    )},${encodeURIComponent(Number(value.lng))}`;
-    window.open(url, "_blank");
+    window.open(buildMapsUrl(value.lat, value.lng), "_blank");
+  }
+
+  if (!GMAPS_KEY) {
+    return (
+      <div className="apexError">
+        Missing <b>VITE_GOOGLE_MAPS_API_KEY</b> in your web/.env
+      </div>
+    );
   }
 
   return (
     <div style={{ display: "grid", gap: 10 }}>
+      {err ? <div className="apexError">{err}</div> : null}
+
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <button className="apexPillBtn apexPillBtnGold" type="button" onClick={useMyLocation}>
           Use my current location
         </button>
 
-        <button className="apexPillBtn" type="button" onClick={openGoogleMapsAtPin} disabled={!value?.lat || !value?.lng}>
+        <button
+          className="apexPillBtn"
+          type="button"
+          onClick={openGoogleMapsAtPin}
+          disabled={!value?.lat || !value?.lng}
+        >
           Open in Google Maps
         </button>
 
         <div className="apexTinyNote" style={{ opacity: 0.85 }}>
-          أو اضغط على الخريطة لتحط Pin.
+          ابحث ثم اختار، أو اضغط على الخريطة لتحط Pin.
         </div>
       </div>
+
+      <input
+        ref={inputRef}
+        className="apexInput"
+        placeholder="Search on Google Maps (luxury)"
+        defaultValue=""
+      />
 
       <div
         ref={mapDivRef}
         style={{
-          height: 280,
+          height: 320,
           borderRadius: 16,
           overflow: "hidden",
           border: "1px solid rgba(255,255,255,0.10)",
+          background: "rgba(255,255,255,0.04)",
         }}
       />
 
@@ -294,7 +459,12 @@ function LeafletMapPicker({ value, onChange }) {
         className="apexInput"
         placeholder="Detected address (you can edit)"
         value={value?.address || ""}
-        onChange={(e) => onChange?.({ ...(value || {}), address: e.target.value })}
+        onChange={(e) =>
+          onChange?.({
+            ...(value || {}),
+            address: e.target.value,
+          })
+        }
       />
 
       {value?.lat && value?.lng ? (
@@ -392,8 +562,14 @@ function MainApp() {
   const [customerAddress, setCustomerAddress] = useState("");
   const [customerNotes, setCustomerNotes] = useState("");
 
-  // Location (map pin)
-  const [location, setLocation] = useState({ lat: null, lng: null, address: "" });
+  // Location (Google Maps pin)
+  const [location, setLocation] = useState({
+    lat: null,
+    lng: null,
+    address: "",
+    maps_url: null,
+    place_id: null,
+  });
 
   // Orders (client view)
   const [orders, setOrders] = useState([]);
@@ -623,11 +799,12 @@ function MainApp() {
             currency: "EGP",
             total: orderTotal,
 
-            // location
+            // location (Google Maps)
             location_lat: Number(location.lat),
             location_lng: Number(location.lng),
             location_address: location.address ? String(location.address) : null,
-            location_maps_url: mapsUrl,
+            location_maps_url: location.maps_url ? String(location.maps_url) : mapsUrl,
+            location_place_id: location.place_id ? String(location.place_id) : null,
           },
         ])
         .select("id")
@@ -669,7 +846,7 @@ function MainApp() {
       const { data: ords, error: ordErr } = await supabase
         .from("orders")
         .select(
-          "id, created_at, status, payment, customer_name, customer_phone, customer_address, customer_notes, currency, total, location_lat, location_lng, location_address, location_maps_url"
+          "id, created_at, status, payment, customer_name, customer_phone, customer_address, customer_notes, currency, total, location_lat, location_lng, location_address, location_maps_url, location_place_id"
         )
         .order("created_at", { ascending: false })
         .limit(20);
@@ -815,7 +992,9 @@ function MainApp() {
               <div className="apexLabel">Brew method</div>
               <select className="apexSelect" value={prefs.method} onChange={(e) => setPrefs((p) => ({ ...p, method: e.target.value }))}>
                 {METHOD_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -824,16 +1003,24 @@ function MainApp() {
               <div className="apexLabel">Strength</div>
               <select className="apexSelect" value={prefs.strength} onChange={(e) => setPrefs((p) => ({ ...p, strength: e.target.value }))}>
                 {STRENGTH_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
 
             <div className="apexField">
               <div className="apexLabel">Flavor direction</div>
-              <select className="apexSelect" value={prefs.flavor_direction} onChange={(e) => setPrefs((p) => ({ ...p, flavor_direction: e.target.value }))}>
+              <select
+                className="apexSelect"
+                value={prefs.flavor_direction}
+                onChange={(e) => setPrefs((p) => ({ ...p, flavor_direction: e.target.value }))}
+              >
                 {FLAVOR_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -842,7 +1029,9 @@ function MainApp() {
               <div className="apexLabel">Acidity</div>
               <select className="apexSelect" value={prefs.acidity} onChange={(e) => setPrefs((p) => ({ ...p, acidity: e.target.value }))}>
                 {ACIDITY_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -851,7 +1040,9 @@ function MainApp() {
               <div className="apexLabel">Time</div>
               <select className="apexSelect" value={prefs.time} onChange={(e) => setPrefs((p) => ({ ...p, time: e.target.value }))}>
                 {TIME_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -860,7 +1051,9 @@ function MainApp() {
               <div className="apexLabel">Milk</div>
               <select className="apexSelect" value={prefs.milk} onChange={(e) => setPrefs((p) => ({ ...p, milk: e.target.value }))}>
                 {MILK_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -976,17 +1169,17 @@ function MainApp() {
             </div>
 
             <div className="apexCartTitle" style={{ marginTop: 14 }}>
-              Delivery location (required)
+              Delivery location (Google Maps) <span style={{ opacity: 0.8 }}>(required)</span>
             </div>
 
-            <LeafletMapPicker value={location} onChange={setLocation} />
+            <GoogleMapsPicker value={location} onChange={setLocation} />
 
             <button className="apexBtnGold" type="button" style={{ marginTop: 12 }} onClick={placeOrder} disabled={cart.length === 0}>
               Place Order
             </button>
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
-              Orders are saved with full details + items + recipe + location pin.
+              Orders are saved with full details + items + recipe + Google location pin.
             </div>
           </div>
         </section>
@@ -1064,6 +1257,7 @@ function MainApp() {
                         <b>Notes:</b> {safeText(o.customer_notes)} <br />
                       </>
                     ) : null}
+
                     {o.location_lat && o.location_lng ? (
                       <>
                         <b>Location:</b> {safeText(o.location_address || "Pinned")} <br />
