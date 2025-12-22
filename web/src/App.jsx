@@ -10,13 +10,18 @@ import { ThemeSupa } from "@supabase/auth-ui-shared";
  * - لو شغال لوكال: حط VITE_API_BASE=http://localhost:3001
  * - لو نفس الدومين (Render Serve static + API نفس السيرفيس): سيبه فاضي
  */
-
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
 function apiUrl(path) {
   if (!API_BASE) return path;
   return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
 }
+
+/**
+ * ✅ Admin whitelist
+ * حط ايميلك هنا (ممكن أكتر من ايميل)
+ */
+const ADMIN_EMAILS = ["ahmedsami7777724@gmail.com"];
 
 const DEFAULT_PREFS = {
   method: "espresso",
@@ -126,7 +131,7 @@ function AuthCallbackInline() {
 
     (async () => {
       try {
-        // ده مهم عشان Supabase يقرأ الـ URL ويحفظ الـ session
+        // مهم: Supabase يقرأ الـ URL ويحفظ الـ session
         const { data, error } = await supabase.auth.getSession();
         if (error) console.warn("callback getSession error:", error);
 
@@ -141,7 +146,6 @@ function AuthCallbackInline() {
         console.warn("callback exception:", e);
         if (alive) setMsg("Error during login. Redirecting…");
       } finally {
-        // ارجع للـ Home
         setTimeout(() => {
           window.location.hash = "#/";
         }, 400);
@@ -157,16 +161,14 @@ function AuthCallbackInline() {
     <div className="apexApp apexThemeDaily" style={{ minHeight: "100vh" }}>
       <div style={{ padding: 24, color: "#fff" }}>
         <div style={{ fontSize: 18, fontWeight: 800 }}>{msg}</div>
-        <div style={{ opacity: 0.75, marginTop: 8 }}>
-          Please wait a moment.
-        </div>
+        <div style={{ opacity: 0.75, marginTop: 8 }}>Please wait a moment.</div>
       </div>
     </div>
   );
 }
 
 /**
- * Wrapper عشان ما نكسرش Rules of Hooks:
+ * Wrapper:
  * - لو callback: نعرض Callback component
  * - غير كده: نعرض التطبيق الطبيعي
  */
@@ -208,13 +210,24 @@ function MainApp() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
   const [customerNotes, setCustomerNotes] = useState("");
+  const [locationLat, setLocationLat] = useState(null);
+  const [locationLng, setLocationLng] = useState(null);
+  const [locationAddress, setLocationAddress] = useState("");
+  const [locationMapsUrl, setLocationMapsUrl] = useState("");
+
 
   // Orders (client view)
   const [orders, setOrders] = useState([]);
   const [loadingOrders, setLoadingOrders] = useState(false);
   const [ordersErr, setOrdersErr] = useState("");
 
+  // ✅ Admin (server-side because RLS=ON)
+  const [adminOrders, setAdminOrders] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminErr, setAdminErr] = useState("");
+
   const user = session?.user || null;
+  const isAdmin = !!user?.email && ADMIN_EMAILS.includes(user.email);
 
   const headline = useMemo(() => {
     return {
@@ -246,17 +259,19 @@ function MainApp() {
     };
   }, []);
 
-  // When user logs in, load saved blends + orders
+  // When user logs in, load saved blends + orders (+ admin)
   useEffect(() => {
     if (!user?.id) {
       setSavedBlends([]);
       setOrders([]);
+      setAdminOrders([]);
       return;
     }
     loadSavedBlends();
     loadMyOrders();
+    if (isAdmin) loadAdminOrders();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id]);
+  }, [user?.id, isAdmin]);
 
   async function fetchBlend() {
     setBlendErr("");
@@ -416,7 +431,7 @@ function MainApp() {
         .insert([
           {
             user_id: user.id,
-            status: "new", // ✅ New
+            status: "new",
             payment: "COD",
             customer_name: customerName.trim(),
             customer_phone: customerPhone.trim(),
@@ -450,6 +465,9 @@ function MainApp() {
 
       clearCart();
       await loadMyOrders();
+
+      // refresh admin view too (if admin)
+      if (isAdmin) await loadAdminOrders();
     } catch (e) {
       console.error(e);
       alert(String(e?.message || e));
@@ -503,6 +521,59 @@ function MainApp() {
     }
   }
 
+  // ✅ Admin helpers (server-side endpoints)
+  async function getAccessToken() {
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.access_token || "";
+  }
+
+  async function loadAdminOrders() {
+    if (!isAdmin) return;
+
+    setAdminErr("");
+    setAdminLoading(true);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(apiUrl("/api/admin/orders"), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || "Failed to load admin orders");
+      setAdminOrders(j.orders || []);
+    } catch (e) {
+      setAdminErr(String(e?.message || e));
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
+  async function updateOrderStatus(orderId, status) {
+    if (!isAdmin) return;
+
+    // optimistic UI
+    setAdminOrders((prev) =>
+      prev.map((o) => (o.id === orderId ? { ...o, status } : o))
+    );
+
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(apiUrl(`/api/admin/orders/${orderId}/status`), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j?.error || "Failed to update status");
+    } catch (e) {
+      alert(String(e?.message || e));
+      // rollback by reloading
+      loadAdminOrders();
+    }
+  }
+
   // Theme class: premium يغيّر الإضاءة كلها
   const themeClass = line === "premium" ? "apexThemePremium" : "apexThemeDaily";
 
@@ -519,13 +590,19 @@ function MainApp() {
         </div>
 
         <div className="apexTopActions">
-          <button
-            className="apexPillBtn"
-            type="button"
-            onClick={() => alert("Admin panel (next)")}
-          >
-            Admin
-          </button>
+          {isAdmin ? (
+            <button
+              className="apexPillBtn"
+              type="button"
+              onClick={() =>
+                document
+                  .getElementById("apexAdmin")
+                  ?.scrollIntoView({ behavior: "smooth" })
+              }
+            >
+              Admin
+            </button>
+          ) : null}
 
           <button
             className="apexPillBtn"
@@ -577,7 +654,9 @@ function MainApp() {
           <div className="apexCardHead">
             <div>
               <div className="apexCardTitle">Blend Builder</div>
-              <div className="apexCardSub">Generate the best blend for your identity</div>
+              <div className="apexCardSub">
+                Generate the best blend for your identity
+              </div>
             </div>
 
             <button
@@ -641,7 +720,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.method}
-                onChange={(e) => setPrefs((p) => ({ ...p, method: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, method: e.target.value }))
+                }
               >
                 {METHOD_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -657,7 +738,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.strength}
-                onChange={(e) => setPrefs((p) => ({ ...p, strength: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, strength: e.target.value }))
+                }
               >
                 {STRENGTH_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -691,7 +774,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.acidity}
-                onChange={(e) => setPrefs((p) => ({ ...p, acidity: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, acidity: e.target.value }))
+                }
               >
                 {ACIDITY_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -707,7 +792,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.time}
-                onChange={(e) => setPrefs((p) => ({ ...p, time: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, time: e.target.value }))
+                }
               >
                 {TIME_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -723,7 +810,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.milk}
-                onChange={(e) => setPrefs((p) => ({ ...p, milk: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, milk: e.target.value }))
+                }
               >
                 {MILK_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -742,7 +831,9 @@ function MainApp() {
             <div className="apexResult">
               <div className="apexResultTop">
                 <div>
-                  <div className="apexBlendName">{safeText(blend.blend_name_suggestion)}</div>
+                  <div className="apexBlendName">
+                    {safeText(blend.blend_name_suggestion)}
+                  </div>
                   <div className="apexBlendWhy">{safeText(blend.why)}</div>
                 </div>
 
@@ -758,8 +849,12 @@ function MainApp() {
                 {blend.recipe.map((r, idx) => (
                   <div className="apexRecipeRow" key={`${r.origin_code}-${idx}`}>
                     <div className="apexRecipeOrigin">
-                      <div className="apexRecipeName">{safeText(r.origin_name)}</div>
-                      <div className="apexRecipeCode">{safeText(r.origin_code)}</div>
+                      <div className="apexRecipeName">
+                        {safeText(r.origin_name)}
+                      </div>
+                      <div className="apexRecipeCode">
+                        {safeText(r.origin_code)}
+                      </div>
                     </div>
                     <div className="apexRecipeGrams">{Number(r.grams)}g</div>
                   </div>
@@ -1026,13 +1121,79 @@ function MainApp() {
         </section>
       ) : null}
 
+      {/* ===== Admin Orders (RLS ON => via backend) ===== */}
+      {isAdmin ? (
+        <section className="apexSaved" id="apexAdmin">
+          <div className="apexSavedHead">
+            <div className="apexSavedTitle">Admin Orders</div>
+            <button className="apexPillBtn" type="button" onClick={loadAdminOrders}>
+              {adminLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {adminErr ? <div className="apexError">{adminErr}</div> : null}
+
+          {adminOrders.length === 0 ? (
+            <div className="apexSavedEmpty">No orders</div>
+          ) : (
+            <div className="apexSavedGrid">
+              {adminOrders.map((o) => (
+                <div className="apexSavedCard" key={o.id}>
+                  <div className="apexSavedName">
+                    Order #{String(o.id).slice(0, 8).toUpperCase()}
+                  </div>
+
+                  <div className={`apexSavedMeta ${statusClass(o.status)}`}>
+                    {prettyStatus(o.status)} • {safeText(o.payment)} •{" "}
+                    {Number(o.total)} {safeText(o.currency || "EGP")}
+                  </div>
+
+                  <div className="apexSavedWhen">
+                    {o.created_at ? new Date(o.created_at).toLocaleString() : ""}
+                  </div>
+
+                  <div className="apexTinyNote" style={{ marginTop: 8 }}>
+                    <b>Name:</b> {safeText(o.customer_name)} <br />
+                    <b>Phone:</b> {safeText(o.customer_phone)} <br />
+                    <b>Address:</b> {safeText(o.customer_address)} <br />
+                    {o.customer_notes ? (
+                      <>
+                        <b>Notes:</b> {safeText(o.customer_notes)} <br />
+                      </>
+                    ) : null}
+                  </div>
+
+                  <div style={{ marginTop: 10 }}>
+                    <div className="apexLabel">Status</div>
+                    <select
+                      className="apexSelect"
+                      value={o.status}
+                      onChange={(e) => updateOrderStatus(o.id, e.target.value)}
+                    >
+                      <option value="new">New</option>
+                      <option value="in_progress">In Progress</option>
+                      <option value="delivering">Delivering</option>
+                      <option value="delivered">Delivered</option>
+                    </select>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : null}
+
       {/* ===== Auth Modal ===== */}
       {authOpen ? (
         <div className="apexModalOverlay" onMouseDown={() => setAuthOpen(false)}>
           <div className="apexModalCard" onMouseDown={(e) => e.stopPropagation()}>
             <div className="apexModalTop">
               <div className="apexModalTitle">{user ? "Account" : "Login"}</div>
-              <button className="apexModalClose" type="button" onClick={() => setAuthOpen(false)}>
+              <button
+                className="apexModalClose"
+                type="button"
+                onClick={() => setAuthOpen(false)}
+              >
                 ✕
               </button>
             </div>
@@ -1041,6 +1202,9 @@ function MainApp() {
               <div className="apexAccountBox">
                 <div className="apexAccountLine">
                   Signed in as: <b>{user.email || user.id}</b>
+                </div>
+                <div className="apexTinyNote" style={{ marginTop: 8 }}>
+                  {isAdmin ? "Admin enabled ✅" : "Standard account"}
                 </div>
                 <button className="apexBtnGold" type="button" onClick={signOut}>
                   Sign out

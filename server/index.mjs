@@ -1,16 +1,99 @@
 import express from "express";
 import cors from "cors";
 import OpenAI from "openai";
-import { promises as fs } from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
+import { createClient } from "@supabase/supabase-js";
 
 // ================== App setup ==================
 const app = express();
-app.use(cors());
+
+/**
+ * CORS:
+ * - لوكال: http://localhost:5173
+ * - Render: https://apex-66yx.onrender.com (أو أي دومين عندك)
+ * تقدر تزود أكتر من origin في ENV: CORS_ORIGINS مفصولين بفواصل
+ */
+const defaultCors = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "https://apex-66yx.onrender.com",
+];
+
+const extraCors = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const allowedOrigins = Array.from(new Set([...defaultCors, ...extraCors]));
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // allow non-browser tools
+      if (!origin) return cb(null, true);
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+      return cb(new Error("Not allowed by CORS: " + origin));
+    },
+    credentials: true,
+  })
+);
+
 app.use(express.json());
 
 // ================== OpenAI client ==================
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// ================== Supabase Admin (server-only) ==================
+if (!process.env.SUPABASE_URL) {
+  console.warn("⚠️ Missing SUPABASE_URL");
+}
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.warn("⚠️ Missing SUPABASE_SERVICE_ROLE_KEY");
+}
+
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  {
+    auth: { persistSession: false },
+  }
+);
+
+// ================== Admin whitelist ==================
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function isAdminEmail(email) {
+  return ADMIN_EMAILS.length ? ADMIN_EMAILS.includes(email) : false;
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const auth = req.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+
+    if (!token) return res.status(401).json({ error: "Missing bearer token" });
+
+    // Validate token using Supabase (server-side)
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !data?.user) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    const email = data.user.email || "";
+    if (!isAdminEmail(email)) {
+      return res.status(403).json({ error: "Not admin" });
+    }
+
+    req.adminUser = data.user;
+    next();
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+}
 
 // ================== Demo stock (بدّلها لاحقًا بـ DB) ==================
 const ORIGINS = [
@@ -87,7 +170,6 @@ function priceBlend(recipe, originMap) {
 }
 
 function violationScore(recipe, sizeG, originMap) {
-  // lower is better
   let score = 0;
   if (!Array.isArray(recipe)) return 1e9;
 
@@ -98,13 +180,14 @@ function violationScore(recipe, sizeG, originMap) {
       continue;
     }
     if (!originMap.has(r.origin_code)) score += 2000;
-    if (seen.has(r.origin_code)) score += 500; // duplicate
+    if (seen.has(r.origin_code)) score += 500;
     seen.add(r.origin_code);
 
     const g = Number(r.grams);
     if (!Number.isFinite(g)) score += 500;
     if (!Number.isInteger(g)) score += 100;
     if (g < 20) score += (20 - g) * 20;
+
     if (originMap.has(r.origin_code)) {
       const max = originMap.get(r.origin_code).maxGrams;
       if (g > max) score += (g - max) * 10;
@@ -134,6 +217,7 @@ function validateStrict(recipe, sizeG, originMap) {
 
     if (!Number.isInteger(r.grams)) throw new Error("grams must be integer");
     if (r.grams < 20) throw new Error("min 20g per origin");
+
     const max = originMap.get(r.origin_code).maxGrams;
     if (r.grams > max) throw new Error("exceeds stock maxGrams");
     sum += r.grams;
@@ -150,19 +234,18 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
       grams: Math.max(20, Math.floor(Number(r.grams) || 20)),
     }));
 
-  // remove duplicates (keep the first by grams desc)
   fixed.sort((a, b) => b.grams - a.grams);
   const used = new Set();
   fixed = fixed.filter((r) =>
     used.has(r.origin_code) ? false : (used.add(r.origin_code), true)
   );
 
-  // keep at most 5
   fixed = fixed.slice(0, 5);
 
-  // ensure at least 2
   if (fixed.length < 2) {
-    const sorted = [...originMap.values()].sort((a, b) => a.costPerG - b.costPerG);
+    const sorted = [...originMap.values()].sort(
+      (a, b) => a.costPerG - b.costPerG
+    );
     const cheapest = sorted[0];
     const second = sorted[1];
     if (cheapest && !used.has(cheapest.code))
@@ -171,13 +254,11 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
       fixed.push({ origin_code: second.code, grams: 20 });
   }
 
-  // cap by maxGrams
   fixed = fixed.map((r) => {
     const max = originMap.get(r.origin_code).maxGrams;
     return { ...r, grams: Math.min(r.grams, max) };
   });
 
-  // normalize sum to exactly sizeG
   let sum = fixed.reduce((s, r) => s + r.grams, 0);
   let guard = 0;
 
@@ -238,12 +319,13 @@ Line:
       available_origins: ORIGINS,
     };
 
-    let best = null; // { raw, score, attempt }
+    let best = null;
     let lastError = null;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
       const system =
-        systemBase + (lastError ? `\nPrevious attempt failed: ${lastError}\nFix it.` : "");
+        systemBase +
+        (lastError ? `\nPrevious attempt failed: ${lastError}\nFix it.` : "");
 
       const r = await openai.responses.create({
         model: "gpt-4.1-mini",
@@ -291,7 +373,6 @@ Line:
 
     if (!best) throw new Error("No usable output after 3 attempts");
 
-    // Autofix best attempt
     const fixedRecipe = autofixBestAttempt(best.raw.recipe, size_g, originMap);
     const pricing = priceBlend(fixedRecipe, originMap);
 
@@ -317,91 +398,85 @@ Line:
   }
 });
 
-// ================== Orders storage (local JSON) ==================
-const DATA_DIR = path.resolve(process.cwd(), "data");
-const ORDERS_PATH = path.join(DATA_DIR, "orders.json");
-
-async function readOrders() {
+// ================== Admin APIs (RLS ON => via service role) ==================
+/**
+ * GET /api/admin/orders
+ * بيرجع orders + items (عشان Admin يشوف التفاصيل كاملة)
+ */
+app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   try {
-    const txt = await fs.readFile(ORDERS_PATH, "utf8");
-    return JSON.parse(txt);
-  } catch {
-    return [];
-  }
-}
+    const { data: ords, error: ordErr } = await supabaseAdmin
+      .from("orders")
+      .select(
+        "id, created_at, status, payment, customer_name, customer_phone, customer_address, customer_notes, currency, total, user_id"
+      )
+      .order("created_at", { ascending: false })
+      .limit(200);
 
-async function writeOrders(orders) {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(ORDERS_PATH, JSON.stringify(orders, null, 2), "utf8");
-}
+    if (ordErr) return res.status(400).json({ error: ordErr.message });
 
-function makeId() {
-  return "ord_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
-}
+    const orderIds = (ords || []).map((o) => o.id);
+    let itemsByOrder = {};
 
-// Create order (Cash on delivery MVP)
-app.post("/api/orders", async (req, res) => {
-  try {
-    const body = req.body || {};
-    const customer = body.customer || {};
-    const items = Array.isArray(body.items) ? body.items : [];
+    if (orderIds.length) {
+      const { data: items, error: itemsErr } = await supabaseAdmin
+        .from("order_items")
+        .select("id, order_id, title, line, size_g, price, recipe")
+        .in("order_id", orderIds);
 
-    if (!customer.name || !customer.phone || !customer.address) {
-      throw new Error("customer.name/phone/address are required");
-    }
-    if (items.length < 1) throw new Error("items required");
+      if (itemsErr) return res.status(400).json({ error: itemsErr.message });
 
-    for (const it of items) {
-      if (!it.title || !Number.isFinite(it.price) || !it.recipe || !Array.isArray(it.recipe)) {
-        throw new Error("each item must have title, price, recipe[]");
-      }
+      itemsByOrder = (items || []).reduce((acc, it) => {
+        acc[it.order_id] = acc[it.order_id] || [];
+        acc[it.order_id].push(it);
+        return acc;
+      }, {});
     }
 
-    const orders = await readOrders();
+    const merged = (ords || []).map((o) => ({
+      ...o,
+      items: itemsByOrder[o.id] || [],
+    }));
 
-    const order = {
-      id: makeId(),
-      createdAt: new Date().toISOString(),
-      status: "new",
-      payment: "COD",
-      customer: {
-        name: String(customer.name),
-        phone: String(customer.phone),
-        address: String(customer.address),
-        notes: customer.notes ? String(customer.notes) : "",
-      },
-      items: items.map((it) => ({
-        title: String(it.title),
-        price: Number(it.price),
-        line: it.line ? String(it.line) : "daily",
-        size_g: Number(it.size_g || 250),
-        recipe: it.recipe.map((r) => ({
-          origin_code: String(r.origin_code),
-          origin_name: String(r.origin_name || r.origin_code),
-          grams: Number(r.grams),
-        })),
-      })),
-      total: items.reduce((s, it) => s + Number(it.price || 0), 0),
-    };
-
-    orders.unshift(order);
-    await writeOrders(orders);
-
-    res.json({ ok: true, order });
+    res.json({ ok: true, orders: merged });
   } catch (e) {
-    res.status(400).json({ error: String(e?.message || e) });
+    res.status(500).json({ error: String(e?.message || e) });
   }
 });
 
-// Admin: list orders (MVP بدون حماية)
-app.get("/api/orders", async (req, res) => {
-  const orders = await readOrders();
-  res.json({ ok: true, orders });
+/**
+ * PATCH /api/admin/orders/:id/status
+ * body: { status: "new" | "in_progress" | "delivering" | "delivered" }
+ */
+app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { status } = req.body || {};
+    const allowed = ["new", "in_progress", "delivering", "delivered"];
+    if (!allowed.includes(status))
+      return res.status(400).json({ error: "Invalid status" });
+
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .update({ status })
+      .eq("id", id)
+      .select("id, status")
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ ok: true, order: data });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
 });
 
 // ================== Serve React build (for Deploy) ==================
 // IMPORTANT: Build frontend first: web -> npm run build (outputs web/dist)
-const WEB_DIST = path.resolve(process.cwd(), "../web/dist");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const WEB_DIST = path.resolve(__dirname, "../web/dist");
 app.use(express.static(WEB_DIST));
 
 // SPA fallback (Express 5 compatible) - exclude /api
