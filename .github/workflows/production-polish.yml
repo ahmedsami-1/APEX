@@ -1,0 +1,38 @@
+name: Production Polish (UI) -> PR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  polish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run production polish
+        run: node scripts/production_polish.mjs
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "ui: production polish (badge, copy, empty states)"
+          title: "UI: Production polish (badge, copy, empty states)"
+          body: |
+            Automated UI polish:
+            - Generate Blend label
+            - Cart item count badge
+            - Better empty cart message
+            - Clearer checkout microcopy
+          branch: ai/production-polish
+          delete-branch: true

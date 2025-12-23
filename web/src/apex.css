@@ -1,0 +1,642 @@
+:root{
+  --bg0:#050505;
+  --bg1:#0b0b0b;
+  --card: rgba(255,255,255,.06);
+  --card2: rgba(255,255,255,.08);
+  --stroke: rgba(255,255,255,.10);
+  --stroke2: rgba(255,255,255,.14);
+  --text: rgba(255,255,255,.92);
+  --muted: rgba(255,255,255,.62);
+  --gold: #d7b65c;
+  --gold2:#caa84f;
+  --shadow: 0 18px 60px rgba(0,0,0,.45);
+  --r: 18px;
+  --r2: 24px;
+  --max: 1180px;
+}
+
+*{ box-sizing:border-box; }
+html, body{ height:100%; }
+body{
+  margin:0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+  color: var(--text);
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(215,182,92,.18), transparent 55%),
+    radial-gradient(900px 500px at 90% 0%, rgba(255,255,255,.06), transparent 60%),
+    linear-gradient(180deg, var(--bg0), var(--bg1));
+}
+
+.apexApp{
+  min-height:100vh;
+  padding: 20px 18px 60px;
+}
+
+/* ===== Theme (Daily vs Premium) ===== */
+.apexThemeDaily{
+  --heroGlow: rgba(215,182,92,.22);
+  --horseOpacity: .78;
+  --horseContrast: 1.05;
+  --horseBrightness: .95;
+}
+
+.apexThemePremium{
+  --heroGlow: rgba(215,182,92,.34);
+  --horseOpacity: .95;
+  --horseContrast: 1.18;
+  --horseBrightness: 1.05;
+}
+
+.apexTopbar{
+  max-width: var(--max);
+  margin: 0 auto;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.apexBrand{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+
+.apexLogo{
+  font-weight: 800;
+  letter-spacing: 6px;
+  font-size: 18px;
+}
+
+.apexTag{
+  font-weight: 700;
+  font-size: 12px;
+  color: rgba(0,0,0,.85);
+  background: linear-gradient(180deg, var(--gold), var(--gold2));
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
+.apexTopActions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+
+.apexPillBtn{
+  border: 1px solid var(--stroke);
+  background: rgba(255,255,255,.04);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: 14px;
+  cursor:pointer;
+  box-shadow: 0 10px 24px rgba(0,0,0,.18);
+}
+.apexPillBtn:hover{ border-color: var(--stroke2); }
+
+.apexPillBtnGold{
+  border-color: rgba(215,182,92,.38);
+  background: rgba(215,182,92,.10);
+}
+
+.apexSubline{
+  max-width: var(--max);
+  margin: 10px auto 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ===== Hero ===== */
+.apexHero{
+  max-width: var(--max);
+  margin: 18px auto 0;
+}
+
+.apexHeroCard{
+  border: 1px solid var(--stroke);
+  background:
+    radial-gradient(650px 340px at 20% 20%, var(--heroGlow), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.04));
+  border-radius: var(--r2);
+  box-shadow: var(--shadow);
+  overflow:hidden;
+
+  display:flex;
+  gap:16px;
+  align-items:stretch;
+  justify-content:space-between;
+  min-height: 150px;
+}
+
+.apexHeroText{
+  padding: 18px 18px 16px;
+  flex: 1 1 auto;
+  min-width: 280px;
+}
+
+.apexHeroTitle{
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: .2px;
+  margin-bottom: 8px;
+}
+
+.apexGold{ color: var(--gold); }
+
+.apexHeroSubtitle{
+  color: rgba(255,255,255,.74);
+  font-size: 14px;
+  line-height: 1.45;
+  max-width: 720px;
+}
+
+.apexHeroPills{
+  margin-top: 12px;
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.apexPill{
+  border: 1px solid var(--stroke);
+  background: rgba(255,255,255,.04);
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: rgba(255,255,255,.78);
+}
+
+/* Horse block: واضح أكتر */
+.apexHeroHorse{
+  width: 300px;
+  min-width: 260px;
+  position: relative;
+  background:
+    radial-gradient(250px 220px at 40% 45%, rgba(215,182,92,.20), transparent 60%),
+    radial-gradient(260px 260px at 65% 50%, rgba(255,255,255,.06), transparent 60%),
+    linear-gradient(90deg, rgba(0,0,0,0), rgba(0,0,0,.35));
+}
+
+.apexHeroHorse::before{
+  content:"";
+  position:absolute;
+  inset: 0;
+  background-image: url("/apex-horse.png");
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: contain;
+  opacity: var(--horseOpacity);
+  filter: contrast(var(--horseContrast)) brightness(var(--horseBrightness));
+  transform: translateX(4px);
+}
+
+.apexHeroHorse::after{
+  content:"";
+  position:absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(0,0,0,.65), rgba(0,0,0,0) 55%);
+}
+
+/* ===== Main grid ===== */
+.apexGrid{
+  max-width: var(--max);
+  margin: 18px auto 0;
+  display:grid;
+  grid-template-columns: 1.35fr .85fr;
+  gap: 16px;
+}
+
+.apexCard{
+  border: 1px solid var(--stroke);
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.035));
+  border-radius: var(--r2);
+  box-shadow: var(--shadow);
+  overflow:hidden;
+}
+
+.apexCardHead{
+  padding: 16px 16px 14px;
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 12px;
+}
+
+.apexCardTitle{
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.apexCardSub{
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.apexCardDivider{
+  height:1px;
+  background: rgba(255,255,255,.08);
+}
+
+.apexBtnGold{
+  border: 1px solid rgba(215,182,92,.45);
+  background: linear-gradient(180deg, rgba(215,182,92,.22), rgba(215,182,92,.10));
+  color: rgba(255,255,255,.92);
+  padding: 11px 14px;
+  border-radius: 14px;
+  cursor:pointer;
+  font-weight: 700;
+  box-shadow: 0 18px 38px rgba(0,0,0,.30);
+}
+.apexBtnGold:disabled{
+  opacity:.6;
+  cursor:not-allowed;
+}
+
+.apexBadges{
+  padding: 12px 16px 6px;
+  display:flex;
+  gap: 10px;
+  flex-wrap:wrap;
+}
+
+.apexBadge{
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: rgba(255,255,255,.70);
+  font-size: 12px;
+}
+
+/* ===== Form ===== */
+.apexFormGrid{
+  padding: 12px 16px 10px;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.apexField{ min-width: 0; }
+.apexLabel{
+  font-size: 12px;
+  color: rgba(255,255,255,.62);
+  margin: 0 0 6px 2px;
+}
+
+.apexSelect, .apexInput, .apexTextarea{
+  width:100%;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.30);
+  color: rgba(255,255,255,.92);
+  padding: 12px 12px;
+  border-radius: 14px;
+  outline:none;
+}
+.apexTextarea{
+  min-height: 90px;
+  resize: vertical;
+}
+
+.apexSeg{
+  display:flex;
+  gap: 10px;
+}
+
+.apexSegBtn{
+  flex: 1 1 0;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  color: rgba(255,255,255,.78);
+  padding: 12px 12px;
+  border-radius: 14px;
+  cursor:pointer;
+  font-weight: 700;
+}
+.apexSegBtn.isActive{
+  border-color: rgba(215,182,92,.55);
+  background: rgba(215,182,92,.14);
+  color: rgba(255,255,255,.95);
+  box-shadow: inset 0 0 0 1px rgba(215,182,92,.20);
+}
+
+.apexHint{
+  padding: 0 16px 14px;
+  color: rgba(255,255,255,.65);
+}
+
+/* ===== Result ===== */
+.apexError{
+  margin: 0 16px 12px;
+  border: 1px solid rgba(255,70,70,.25);
+  background: rgba(255,70,70,.08);
+  color: rgba(255,210,210,.95);
+  padding: 10px 12px;
+  border-radius: 14px;
+  white-space: pre-wrap;
+}
+
+.apexResult{
+  margin: 0 16px 16px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.22);
+  border-radius: 18px;
+  padding: 14px 14px 12px;
+}
+
+.apexResultTop{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap: 14px;
+}
+
+.apexBlendName{
+  font-size: 16px;
+  font-weight: 900;
+}
+.apexBlendWhy{
+  margin-top: 6px;
+  color: rgba(255,255,255,.72);
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 680px;
+}
+
+.apexPriceBox{
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.03);
+  border-radius: 14px;
+  padding: 10px 12px;
+  min-width: 120px;
+  text-align:left;
+}
+.apexPriceLabel{
+  font-size: 11px;
+  color: rgba(255,255,255,.62);
+}
+.apexPrice{
+  margin-top: 2px;
+  font-weight: 900;
+  color: rgba(215,182,92,.95);
+}
+
+.apexRecipeTitle{
+  margin-top: 12px;
+  font-weight: 900;
+}
+
+.apexRecipeGrid{
+  margin-top: 10px;
+  display:flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.apexRecipeRow{
+  display:flex;
+  justify-content:space-between;
+  gap: 12px;
+  padding: 10px 10px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 14px;
+  background: rgba(255,255,255,.02);
+}
+
+.apexRecipeName{
+  font-weight: 800;
+}
+.apexRecipeCode{
+  margin-top: 2px;
+  font-size: 12px;
+  color: rgba(255,255,255,.62);
+}
+.apexRecipeGrams{
+  font-weight: 900;
+  color: rgba(255,255,255,.90);
+}
+
+.apexResultActions{
+  margin-top: 12px;
+  display:flex;
+  gap: 12px;
+  align-items:center;
+  flex-wrap:wrap;
+}
+.apexSaveMeta{
+  color: rgba(255,255,255,.62);
+  font-size: 12px;
+}
+
+/* ===== Right card ===== */
+.apexChip{
+  border: 1px solid rgba(215,182,92,.35);
+  background: rgba(215,182,92,.12);
+  color: rgba(0,0,0,.78);
+  font-weight: 900;
+  padding: 8px 12px;
+  border-radius: 999px;
+}
+
+.apexCartBlock{
+  padding: 14px 16px 16px;
+}
+
+.apexCartTitle{
+  font-size: 18px;
+  font-weight: 900;
+}
+.apexCartEmpty{
+  margin-top: 8px;
+  color: rgba(255,255,255,.62);
+}
+
+.apexTotalBox{
+  margin-top: 12px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.03);
+  border-radius: 16px;
+  padding: 12px 12px;
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.apexTotalLabel{
+  color: rgba(255,255,255,.62);
+  font-size: 12px;
+}
+.apexTotalValue{
+  font-weight: 900;
+  color: rgba(215,182,92,.95);
+}
+
+.apexCheckoutGrid{
+  margin-top: 10px;
+  display:grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.apexTinyNote{
+  color: rgba(255,255,255,.55);
+  font-size: 12px;
+}
+
+/* ===== Saved blends ===== */
+.apexSaved{
+  max-width: var(--max);
+  margin: 16px auto 0;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: var(--r2);
+  background: rgba(255,255,255,.03);
+  box-shadow: 0 18px 40px rgba(0,0,0,.25);
+  padding: 14px 16px 16px;
+}
+
+.apexSavedHead{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap: 10px;
+}
+
+.apexSavedTitle{
+  font-size: 16px;
+  font-weight: 900;
+}
+
+.apexSavedEmpty{
+  margin-top: 10px;
+  color: rgba(255,255,255,.62);
+}
+
+.apexSavedGrid{
+  margin-top: 12px;
+  display:grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.apexSavedCard{
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.22);
+  border-radius: 18px;
+  padding: 12px 12px;
+}
+
+.apexSavedName{
+  font-weight: 900;
+}
+.apexSavedMeta{
+  margin-top: 4px;
+  color: rgba(255,255,255,.70);
+  font-size: 12px;
+}
+.apexSavedWhen{
+  margin-top: 8px;
+  color: rgba(255,255,255,.55);
+  font-size: 12px;
+}
+
+/* ===== Modal ===== */
+.apexModalOverlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.62);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 18px;
+  z-index: 50;
+}
+
+.apexModalCard{
+  width: min(520px, 100%);
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(15,15,15,.92);
+  border-radius: 20px;
+  box-shadow: 0 26px 80px rgba(0,0,0,.55);
+  padding: 14px 14px 12px;
+}
+
+.apexModalTop{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.apexModalTitle{
+  font-weight: 900;
+  font-size: 16px;
+}
+
+.apexModalClose{
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.05);
+  color: rgba(255,255,255,.85);
+  border-radius: 12px;
+  padding: 8px 10px;
+  cursor:pointer;
+}
+
+.apexAccountBox{
+  display:flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 4px 2px;
+}
+
+.apexAccountLine{
+  color: rgba(255,255,255,.78);
+}
+
+/* ===== Responsive ===== */
+@media (max-width: 980px){
+  .apexGrid{
+    grid-template-columns: 1fr;
+  }
+  .apexHeroHorse{
+    width: 260px;
+  }
+  .apexSavedGrid{
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 560px){
+  .apexHeroCard{
+    flex-direction: column;
+  }
+  .apexHeroHorse{
+    width: 100%;
+    min-width: 0;
+    height: 170px;
+  }
+  .apexHeroHorse::before{
+    background-position: right 20px center;
+  }
+  .apexFormGrid{
+    grid-template-columns: 1fr;
+  }
+  .apexSavedGrid{
+    grid-template-columns: 1fr;
+  }
+}
+.apexStatusNew {
+  color: #c9a24d;
+}
+
+.apexStatusProgress {
+  color: #ffb020;
+}
+
+.apexStatusDelivering {
+  color: #4da3ff;
+}
+
+.apexStatusDelivered {
+  color: #4caf50;
+}

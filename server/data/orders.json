@@ -1,0 +1,40 @@
+[
+  {
+    "id": "ord_mjbxptrm_mbnb07",
+    "createdAt": "2025-12-18T21:10:34.738Z",
+    "status": "new",
+    "payment": "COD",
+    "customer": {
+      "name": "Ahmed",
+      "phone": "01229857503",
+      "address": "SheikhZayed",
+      "notes": "Nothing"
+    },
+    "items": [
+      {
+        "title": "APEX Daily ChocoNut",
+        "price": 270,
+        "line": "daily",
+        "size_g": 250,
+        "recipe": [
+          {
+            "origin_code": "BR_SANTOS",
+            "origin_name": "Brazil Santos",
+            "grams": 120
+          },
+          {
+            "origin_code": "HN_CLASSIC",
+            "origin_name": "Honduras Classic",
+            "grams": 80
+          },
+          {
+            "origin_code": "CO_SUPREMO",
+            "origin_name": "Colombia Supremo",
+            "grams": 50
+          }
+        ]
+      }
+    ],
+    "total": 270
+  }
+]
