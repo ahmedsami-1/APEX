@@ -1047,7 +1047,7 @@ function MainApp() {
             </div>
 
             <button className="apexBtnGold" type="button" onClick={fetchBlend} disabled={loadingBlend}>
-              {loadingBlend ? "Generating..." : "Get My Blend"}
+              {loadingBlend ? "Generating..." : "Generate Blend"}
             </button>
           </div>
 
@@ -1190,7 +1190,7 @@ function MainApp() {
         <section className="apexCard">
           <div className="apexCardHead">
             <div>
-              <div className="apexCardTitle">Cart & Checkout</div>
+              <div className="apexCardTitle">Cart & Checkout <span className="apexCountBadge">{cart.length}</span></div>
               <div className="apexCardSub">Cash on delivery MVP</div>
             </div>
             <span className="apexChip">COD</span>
@@ -1207,7 +1207,7 @@ function MainApp() {
             </div>
 
             {cart.length === 0 ? (
-              <div className="apexCartEmpty">Empty</div>
+              <div className="apexCartEmpty">Your cart is empty. Generate a blend, then tap “Add Blend to Cart”.</div>
             ) : (
               <div className="apexRecipeGrid" style={{ marginTop: 10 }}>
                 {cart.map((it) => (
