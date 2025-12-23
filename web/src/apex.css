@@ -640,3 +640,18 @@ body{
 .apexStatusDelivered {
   color: #4caf50;
 }
+
+.apexCountBadge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:22px;
+  height:22px;
+  padding:0 8px;
+  border-radius:999px;
+  margin-left:10px;
+  font-size:12px;
+  font-weight:800;
+  background:rgba(255,255,255,0.10);
+  border:1px solid rgba(255,255,255,0.14);
+}
