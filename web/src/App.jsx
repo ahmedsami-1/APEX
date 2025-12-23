@@ -79,15 +79,15 @@ function cartTotal(items) {
 function prettyStatus(s) {
   switch (s) {
     case "new":
-      return "New";
+      return "NEW";
     case "in_progress":
-      return "In Progress";
+      return "IN PROGRESS";
     case "delivering":
-      return "Delivering";
+      return "DELIVERING";
     case "delivered":
-      return "Delivered";
+      return "DELIVERED";
     default:
-      return safeText(s);
+      return safeText(s).toUpperCase();
   }
 }
 
@@ -104,6 +104,112 @@ function statusClass(s) {
     default:
       return "";
   }
+}
+
+/* =========================
+   Tiny Production UX helpers
+   ========================= */
+
+function Stepper({ step, onJump }) {
+  const steps = [
+    { k: 1, t: "Preferences" },
+    { k: 2, t: "Review" },
+    { k: 3, t: "Checkout" },
+    { k: 4, t: "Done" },
+  ];
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        gap: 10,
+        flexWrap: "wrap",
+        alignItems: "center",
+        justifyContent: "space-between",
+        padding: "10px 12px",
+        borderRadius: 14,
+        border: "1px solid rgba(255,255,255,0.10)",
+        background: "rgba(255,255,255,0.04)",
+        marginTop: 12,
+      }}
+    >
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        {steps.map((s) => {
+          const isOn = s.k <= step;
+          const isActive = s.k === step;
+          return (
+            <button
+              key={s.k}
+              type="button"
+              onClick={() => onJump?.(s.k)}
+              style={{
+                cursor: "pointer",
+                borderRadius: 999,
+                padding: "8px 12px",
+                fontSize: 12,
+                fontWeight: 800,
+                letterSpacing: 0.4,
+                border: "1px solid rgba(255,255,255,0.14)",
+                background: isActive
+                  ? "rgba(255,255,255,0.20)"
+                  : isOn
+                  ? "rgba(255,255,255,0.10)"
+                  : "rgba(255,255,255,0.05)",
+                opacity: isOn ? 1 : 0.55,
+              }}
+              title={`Go to: ${s.t}`}
+            >
+              {s.k}. {s.t}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ fontSize: 12, opacity: 0.8, fontWeight: 700 }}>
+        Tip: Generate your blend, review it, then checkout.
+      </div>
+    </div>
+  );
+}
+
+function OrderTimeline({ status }) {
+  const map = {
+    new: 1,
+    in_progress: 2,
+    delivering: 3,
+    delivered: 4,
+  };
+  const step = map[status] || 1;
+
+  const items = [
+    { k: 1, t: "NEW" },
+    { k: 2, t: "IN PROGRESS" },
+    { k: 3, t: "DELIVERING" },
+    { k: 4, t: "DELIVERED" },
+  ];
+
+  return (
+    <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
+      {items.map((it) => {
+        const on = it.k <= step;
+        return (
+          <div key={it.k} style={{ display: "flex", alignItems: "center", gap: 8, opacity: on ? 1 : 0.45 }}>
+            <div
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 999,
+                border: "1px solid rgba(255,255,255,0.20)",
+                background: on ? "rgba(255,255,255,0.70)" : "rgba(255,255,255,0.20)",
+              }}
+            />
+            <div style={{ width: 18, height: 2, background: on ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.12)" }} />
+            <div style={{ fontSize: 12, fontWeight: 800 }}>{it.t}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /* =========================
@@ -254,7 +360,6 @@ function GoogleMapsPicker({ value, onChange }) {
       setBusy(true);
 
       geocoder.geocode({ location: pos }, (results, status) => {
-        // status examples: OK, ZERO_RESULTS, OVER_QUERY_LIMIT, REQUEST_DENIED, INVALID_REQUEST
         if (status !== "OK") {
           console.warn("Geocoder status:", status, results);
         }
@@ -265,13 +370,11 @@ function GoogleMapsPicker({ value, onChange }) {
         const pid =
           status === "OK" && results && results.length ? results[0].place_id || null : null;
 
-        // if REQUEST_DENIED -> show message (usually API restrictions)
         if (status === "REQUEST_DENIED") {
           setErr(
             "Google reverse geocode denied. غالبًا لازم تفعّل Geocoding API أو تصلّح Restrict للـ Key (HTTP referrers/APIs)."
           );
         } else {
-          // clear old error if success/other
           setErr("");
         }
 
@@ -366,7 +469,6 @@ function GoogleMapsPicker({ value, onChange }) {
         const addr = place.formatted_address || place.name || "";
         const pid = place.place_id || null;
 
-        // selecting a place means custom
         setMode("custom");
         modeRef.current = "custom";
 
@@ -394,7 +496,6 @@ function GoogleMapsPicker({ value, onChange }) {
   useEffect(() => {
     const marker = markerRef.current;
     if (marker) marker.setDraggable(mode === "custom");
-    // also persist mode into parent value
     onChange?.({ ...(value || {}), mode });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
@@ -426,11 +527,9 @@ function GoogleMapsPicker({ value, onChange }) {
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        // current mode
         setMode("current");
         modeRef.current = "current";
 
-        // force reverse geocode to fill address
         setPoint(pos.coords.latitude, pos.coords.longitude, {
           preferReverse: true,
           newMode: "current",
@@ -448,7 +547,6 @@ function GoogleMapsPicker({ value, onChange }) {
     setErr("");
     setMode("custom");
     modeRef.current = "custom";
-    // tip: if no pin yet, keep map centered; user will click
   }
 
   function openGoogleMapsAtPin() {
@@ -539,7 +637,6 @@ function AuthCallbackInline() {
       try {
         const url = window.location.href;
 
-        // لو فيه code يبقى لازم exchange
         if (url.includes("code=")) {
           const { error } = await supabase.auth.exchangeCodeForSession(url);
           if (error) throw error;
@@ -554,7 +651,6 @@ function AuthCallbackInline() {
         console.warn("callback exception:", e);
         if (alive) setMsg(`Login error: ${e?.message || e}`);
       } finally {
-        // متستعجلش 400ms.. خليه ثانية عشان التخزين يثبت
         setTimeout(() => {
           window.location.href = "/#/";
         }, 1000);
@@ -576,8 +672,6 @@ function AuthCallbackInline() {
   );
 }
 
-
-
 function AppShell() {
   const path = typeof window !== "undefined" ? window.location.pathname : "";
   const isCallbackPath = path === "/auth/callback";
@@ -591,11 +685,13 @@ function AppShell() {
   return <MainApp />;
 }
 
-
 function MainApp() {
   // Auth
   const [session, setSession] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
+
+  // Stepper (✅ safe + render-friendly)
+  const [step, setStep] = useState(1); // 1 prefs, 2 review, 3 checkout, 4 done
 
   // Blend builder
   const [line, setLine] = useState("daily"); // daily|premium
@@ -628,7 +724,7 @@ function MainApp() {
     address: "",
     maps_url: null,
     place_id: null,
-    mode: "current", // NEW
+    mode: "current",
   });
 
   // Orders (client view)
@@ -637,6 +733,10 @@ function MainApp() {
   const [ordersErr, setOrdersErr] = useState("");
 
   const user = session?.user || null;
+
+  const builderRef = useRef(null);
+  const checkoutRef = useRef(null);
+  const ordersRef = useRef(null);
 
   const headline = useMemo(() => {
     return {
@@ -679,6 +779,15 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  function jumpToStep(k) {
+    setStep(k);
+    const opts = { behavior: "smooth", block: "start" };
+    if (k === 1) builderRef.current?.scrollIntoView?.(opts);
+    if (k === 2) builderRef.current?.scrollIntoView?.(opts);
+    if (k === 3) checkoutRef.current?.scrollIntoView?.(opts);
+    if (k === 4) ordersRef.current?.scrollIntoView?.(opts);
+  }
+
   async function fetchBlend() {
     setBlendErr("");
     setSaveMsg("");
@@ -709,6 +818,8 @@ function MainApp() {
       if (!res.ok) throw new Error(data?.error || "Failed to generate blend");
 
       setBlend(data);
+      setStep(2);
+      setTimeout(() => builderRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
     } catch (e) {
       setBlendErr(String(e?.message || e));
     } finally {
@@ -787,9 +898,13 @@ function MainApp() {
       size_g: Number(sizeG || 250),
       price: Number(blend.price || 0),
       recipe: Array.isArray(blend.recipe) ? blend.recipe : [],
+      pricing: blend.pricing ?? null,
+      why: blend.why ?? null,
     };
 
     setCart((prev) => [item, ...prev]);
+    setStep(3);
+    setTimeout(() => checkoutRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
   }
 
   function addSavedBlendToCart(b) {
@@ -805,6 +920,8 @@ function MainApp() {
     };
 
     setCart((prev) => [item, ...prev]);
+    setStep(3);
+    setTimeout(() => checkoutRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
   }
 
   function removeCartItem(id) {
@@ -816,128 +933,121 @@ function MainApp() {
   }
 
   async function placeOrder() {
-  if (!user) {
-    setAuthOpen(true);
-    alert("Login required to place orders.");
-    return;
-  }
-  if (cart.length === 0) return;
+    if (!user) {
+      setAuthOpen(true);
+      alert("Login required to place orders.");
+      return;
+    }
+    if (cart.length === 0) {
+      alert("Your cart is empty. Add a blend first.");
+      return;
+    }
 
-  if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
-    alert("Please fill name, phone, address.");
-    return;
-  }
+    if (!customerName.trim() || !customerPhone.trim() || !customerAddress.trim()) {
+      alert("Please fill name, phone, address.");
+      return;
+    }
 
-  if (!location?.lat || !location?.lng) {
-    alert("Please pick delivery location on the map.");
-    return;
-  }
+    if (!location?.lat || !location?.lng) {
+      alert("Please pick delivery location on the map.");
+      return;
+    }
 
-  try {
-    const orderTotal = cartTotal(cart);
+    try {
+      const orderTotal = cartTotal(cart);
 
-    const fallbackMapsUrl =
-      location?.lat && location?.lng
-        ? `https://www.google.com/maps?q=${encodeURIComponent(Number(location.lat))},${encodeURIComponent(
-            Number(location.lng)
-          )}`
-        : null;
+      const fallbackMapsUrl =
+        location?.lat && location?.lng
+          ? `https://www.google.com/maps?q=${encodeURIComponent(Number(location.lat))},${encodeURIComponent(
+              Number(location.lng)
+            )}`
+          : null;
 
-    // === snapshot of all choices at checkout ===
-    const preferencesSnapshot = {
-      line,
-      size_g: sizeG,
-      method: prefs?.method,
-      strength: prefs?.strength,
-      flavor_direction: prefs?.flavor_direction,
-      acidity: prefs?.acidity,
-      time: prefs?.time,
-      milk: prefs?.milk,
-    };
+      const preferencesSnapshot = {
+        line,
+        size_g: sizeG,
+        method: prefs?.method,
+        strength: prefs?.strength,
+        flavor_direction: prefs?.flavor_direction,
+        acidity: prefs?.acidity,
+        time: prefs?.time,
+        milk: prefs?.milk,
+      };
 
-    // === snapshot of location (for debugging/audit) ===
-    const locationSnapshot = {
-      lat: Number(location.lat),
-      lng: Number(location.lng),
-      address: location.address || "",
-      maps_url: location.maps_url || fallbackMapsUrl,
-      place_id: location.place_id || null,
+      const locationSnapshot = {
+        lat: Number(location.lat),
+        lng: Number(location.lng),
+        address: location.address || "",
+        maps_url: location.maps_url || fallbackMapsUrl,
+        place_id: location.place_id || null,
+        mode: location.mode || null,
+        source: location.source || "google_maps",
+        captured_at: new Date().toISOString(),
+      };
 
-      // optional extra fields if you store them later
-      mode: location.mode || null, // "current" | "custom" (if you add it in UI)
-      source: location.source || "google_maps", // just a tag
-      captured_at: new Date().toISOString(),
-    };
+      const locationMode = location?.mode === "current" ? "current" : "custom";
 
-    // Decide mode (best effort)
-    const locationMode = location?.mode === "current" ? "current" : "custom";
+      const { data: orderRow, error: orderErr } = await supabase
+        .from("orders")
+        .insert([
+          {
+            user_id: user.id,
+            status: "new",
+            payment: "COD",
+            customer_name: customerName.trim(),
+            customer_phone: customerPhone.trim(),
+            customer_address: customerAddress.trim(),
+            customer_notes: customerNotes.trim(),
+            currency: "EGP",
+            total: orderTotal,
+            preferences: preferencesSnapshot,
+            location_mode: locationMode,
+            location_lat: Number(location.lat),
+            location_lng: Number(location.lng),
+            location_address: location.address ? String(location.address) : null,
+            location_maps_url: location.maps_url ? String(location.maps_url) : fallbackMapsUrl,
+            location_place_id: location.place_id ? String(location.place_id) : null,
+            location_snapshot: locationSnapshot,
+          },
+        ])
+        .select("id")
+        .single();
 
-    // 1) create order header
-    const { data: orderRow, error: orderErr } = await supabase
-      .from("orders")
-      .insert([
-        {
-          user_id: user.id,
-          status: "new",
-          payment: "COD",
-          customer_name: customerName.trim(),
-          customer_phone: customerPhone.trim(),
-          customer_address: customerAddress.trim(),
-          customer_notes: customerNotes.trim(),
-          currency: "EGP",
-          total: orderTotal,
+      if (orderErr) throw orderErr;
 
-          // snapshot
-          preferences: preferencesSnapshot,
+      const orderId = orderRow.id;
 
-          // location (Google Maps)
-          location_mode: locationMode,
-          location_lat: Number(location.lat),
-          location_lng: Number(location.lng),
-          location_address: location.address ? String(location.address) : null,
-          location_maps_url: location.maps_url ? String(location.maps_url) : fallbackMapsUrl,
-          location_place_id: location.place_id ? String(location.place_id) : null,
-          location_snapshot: locationSnapshot,
+      const items = cart.map((it) => ({
+        order_id: orderId,
+        title: it.title,
+        line: it.line,
+        size_g: it.size_g,
+        price: Number(it.price || 0),
+        recipe: it.recipe || [],
+        meta: {
+          cart_item_id: it.id,
+          created_from: "cart",
+          pricing: it.pricing ?? null,
+          why: it.why ?? null,
+          notes: it.notes ?? null,
         },
-      ])
-      .select("id")
-      .single();
+      }));
 
-    if (orderErr) throw orderErr;
+      const { error: itemsErr } = await supabase.from("order_items").insert(items);
+      if (itemsErr) throw itemsErr;
 
-    const orderId = orderRow.id;
+      alert("Order placed ✅");
 
-    // 2) insert items (include meta snapshot too)
-    const items = cart.map((it) => ({
-      order_id: orderId,
-      title: it.title,
-      line: it.line,
-      size_g: it.size_g,
-      price: Number(it.price || 0),
-      recipe: it.recipe || [],
-      meta: {
-        // keep anything useful
-        cart_item_id: it.id,
-        created_from: "cart",
-        pricing: it.pricing ?? null,
-        why: it.why ?? null,
-        notes: it.notes ?? null,
-      },
-    }));
+      clearCart();
+      await loadMyOrders();
 
-    const { error: itemsErr } = await supabase.from("order_items").insert(items);
-    if (itemsErr) throw itemsErr;
-
-    alert("Order placed ✅");
-
-    clearCart();
-    await loadMyOrders();
-  } catch (e) {
-    console.error(e);
-    alert(String(e?.message || e));
+      setStep(4);
+      setTimeout(() => ordersRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
+    } catch (e) {
+      console.error(e);
+      alert(String(e?.message || e));
+    }
   }
-}
-
 
   async function loadMyOrders() {
     if (!user) return;
@@ -1015,6 +1125,8 @@ function MainApp() {
 
       <div className="apexSubline">{headline.micro}</div>
 
+      <Stepper step={step} onJump={jumpToStep} />
+
       {/* ===== Hero ===== */}
       <section className="apexHero">
         <div className="apexHeroCard">
@@ -1039,7 +1151,7 @@ function MainApp() {
       {/* ===== Main grid ===== */}
       <main className="apexGrid">
         {/* ===== Blend Builder ===== */}
-        <section className="apexCard">
+        <section className="apexCard" ref={builderRef}>
           <div className="apexCardHead">
             <div>
               <div className="apexCardTitle">Blend Builder</div>
@@ -1047,7 +1159,7 @@ function MainApp() {
             </div>
 
             <button className="apexBtnGold" type="button" onClick={fetchBlend} disabled={loadingBlend}>
-              {loadingBlend ? "Generating..." : "Get My Blend"}
+              {loadingBlend ? "Generating..." : "Generate Blend"}
             </button>
           </div>
 
@@ -1174,8 +1286,8 @@ function MainApp() {
                   {saving ? "Saving..." : "Save Blend"}
                 </button>
 
-                <button className="apexPillBtn apexPillBtnGold" type="button" onClick={addBlendToCartFromGenerated} disabled={!blend}>
-                  Add to Cart
+                <button className="apexPillBtn apexPillBtnGold" type="button" onClick={addBlendToCartFromGenerated} disabled={!blend || loadingBlend}>
+                  Add Blend to Cart
                 </button>
 
                 <div className="apexSaveMeta">
@@ -1187,10 +1299,12 @@ function MainApp() {
         </section>
 
         {/* ===== Cart & Checkout ===== */}
-        <section className="apexCard">
+        <section className="apexCard" ref={checkoutRef}>
           <div className="apexCardHead">
             <div>
-              <div className="apexCardTitle">Cart & Checkout</div>
+              <div className="apexCardTitle">
+                Cart & Checkout <span className="apexCountBadge">{cart.length}</span>
+              </div>
               <div className="apexCardSub">Cash on delivery MVP</div>
             </div>
             <span className="apexChip">COD</span>
@@ -1207,7 +1321,9 @@ function MainApp() {
             </div>
 
             {cart.length === 0 ? (
-              <div className="apexCartEmpty">Empty</div>
+              <div className="apexCartEmpty">
+                Your cart is empty. Generate a blend, then tap “Add Blend to Cart”.
+              </div>
             ) : (
               <div className="apexRecipeGrid" style={{ marginTop: 10 }}>
                 {cart.map((it) => (
@@ -1252,8 +1368,14 @@ function MainApp() {
 
             <GoogleMapsPicker value={location} onChange={setLocation} />
 
-            <button className="apexBtnGold" type="button" style={{ marginTop: 12 }} onClick={placeOrder} disabled={cart.length === 0}>
-              Place Order
+            <button
+              className="apexBtnGold"
+              type="button"
+              style={{ marginTop: 12 }}
+              onClick={placeOrder}
+              disabled={cart.length === 0}
+            >
+              Place Order (Cash on Delivery)
             </button>
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
@@ -1285,7 +1407,12 @@ function MainApp() {
                   </div>
                   <div className="apexSavedWhen">{b.created_at ? new Date(b.created_at).toLocaleString() : ""}</div>
 
-                  <button className="apexPillBtn apexPillBtnGold" type="button" style={{ marginTop: 10, width: "100%" }} onClick={() => addSavedBlendToCart(b)}>
+                  <button
+                    className="apexPillBtn apexPillBtnGold"
+                    type="button"
+                    style={{ marginTop: 10, width: "100%" }}
+                    onClick={() => addSavedBlendToCart(b)}
+                  >
                     Add to Cart
                   </button>
                 </div>
@@ -1297,7 +1424,7 @@ function MainApp() {
 
       {/* ===== My Orders ===== */}
       {user ? (
-        <section className="apexSaved">
+        <section className="apexSaved" ref={ordersRef}>
           <div className="apexSavedHead">
             <div className="apexSavedTitle">My Orders</div>
             <button className="apexPillBtn" type="button" onClick={loadMyOrders}>
@@ -1315,11 +1442,30 @@ function MainApp() {
                 <div className="apexSavedCard" key={o.id}>
                   <div className="apexSavedName">Order #{String(o.id).slice(0, 8).toUpperCase()}</div>
 
-                  <div className={`apexSavedMeta ${statusClass(o.status)}`}>
-                    {prettyStatus(o.status)} • {safeText(o.payment)} • {Number(o.total)} {safeText(o.currency || "EGP")}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+                    <span
+                      className={`apexSavedMeta ${statusClass(o.status)}`}
+                      style={{
+                        display: "inline-flex",
+                        borderRadius: 999,
+                        padding: "6px 10px",
+                        fontWeight: 900,
+                        letterSpacing: 0.6,
+                      }}
+                    >
+                      {prettyStatus(o.status)}
+                    </span>
+
+                    <div className="apexTinyNote" style={{ opacity: 0.85 }}>
+                      {safeText(o.payment)} • {Number(o.total)} {safeText(o.currency || "EGP")}
+                    </div>
                   </div>
 
-                  <div className="apexSavedWhen">{o.created_at ? new Date(o.created_at).toLocaleString() : ""}</div>
+                  <OrderTimeline status={o.status} />
+
+                  <div className="apexSavedWhen" style={{ marginTop: 8 }}>
+                    {o.created_at ? new Date(o.created_at).toLocaleString() : ""}
+                  </div>
 
                   <div className="apexTinyNote" style={{ marginTop: 8 }}>
                     <b>Name:</b> {safeText(o.customer_name)} <br />
