@@ -166,7 +166,9 @@ function GoogleMapsPicker({ value, onChange }) {
   const inputRef = useRef(null);
   const autoRef = useRef(null);
 
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(
+const [step, setStep] = useState(1);
+false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -469,15 +471,15 @@ function GoogleMapsPicker({ value, onChange }) {
       {err ? <div className="apexError">{err}</div> : null}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button className="apexPillBtn apexPillBtnGold" type="button" onClick={useMyLocation} disabled={busy}>
+        <button disabled={loadingBlend} className="apexPillBtn apexPillBtnGold" type="button" onClick={useMyLocation} disabled={busy}>
           {busy && mode === "current" ? "Detecting..." : "My current location"}
         </button>
 
-        <button className="apexPillBtn" type="button" onClick={deliverToAnotherLocation} disabled={busy}>
+        <button disabled={loadingBlend} className="apexPillBtn" type="button" onClick={deliverToAnotherLocation} disabled={busy}>
           Deliver to another location
         </button>
 
-        <button className="apexPillBtn" type="button" onClick={openGoogleMapsAtPin} disabled={!value?.lat || !value?.lng}>
+        <button disabled={loadingBlend} className="apexPillBtn" type="button" onClick={openGoogleMapsAtPin} disabled={!value?.lat || !value?.lng}>
           Open in Google Maps
         </button>
 
@@ -999,15 +1001,15 @@ function MainApp() {
         </div>
 
         <div className="apexTopActions">
-          <button className="apexPillBtn" type="button" onClick={() => alert("Admin panel (next)")}>
+          <button disabled={loadingBlend} className="apexPillBtn" type="button" onClick={() => alert("Admin panel (next)")}>
             Admin
           </button>
 
-          <button className="apexPillBtn" type="button" onClick={() => window.open(apiUrl("/health"), "_blank")}>
+          <button disabled={loadingBlend} className="apexPillBtn" type="button" onClick={() => window.open(apiUrl("/health"), "_blank")}>
             Backend
           </button>
 
-          <button className="apexPillBtn apexPillBtnGold" type="button" onClick={() => setAuthOpen(true)}>
+          <button disabled={loadingBlend} className="apexPillBtn apexPillBtnGold" type="button" onClick={() => setAuthOpen(true)}>
             {user ? "Account" : "Login"}
           </button>
         </div>
@@ -1046,7 +1048,7 @@ function MainApp() {
               <div className="apexCardSub">Generate the best blend for your identity</div>
             </div>
 
-            <button className="apexBtnGold" type="button" onClick={fetchBlend} disabled={loadingBlend}>
+            <button disabled={loadingBlend} className="apexBtnGold" type="button" onClick={fetchBlend} disabled={loadingBlend}>
               {loadingBlend ? "Generating..." : "Generate Blend"}
             </button>
           </div>
@@ -1064,10 +1066,10 @@ function MainApp() {
             <div className="apexField">
               <div className="apexLabel">Line</div>
               <div className="apexSeg">
-                <button type="button" className={`apexSegBtn ${line === "daily" ? "isActive" : ""}`} onClick={() => setLine("daily")}>
+                <button disabled={loadingBlend} type="button" className={`apexSegBtn ${line === "daily" ? "isActive" : ""}`} onClick={() => setLine("daily")}>
                   Daily (optimum)
                 </button>
-                <button type="button" className={`apexSegBtn ${line === "premium" ? "isActive" : ""}`} onClick={() => setLine("premium")}>
+                <button disabled={loadingBlend} type="button" className={`apexSegBtn ${line === "premium" ? "isActive" : ""}`} onClick={() => setLine("premium")}>
                   Premium (best taste)
                 </button>
               </div>
@@ -1170,11 +1172,11 @@ function MainApp() {
               </div>
 
               <div className="apexResultActions">
-                <button className="apexBtnGold" type="button" onClick={saveCurrentBlend} disabled={!blend || saving}>
+                <button disabled={loadingBlend} className="apexBtnGold" type="button" onClick={saveCurrentBlend} disabled={!blend || saving}>
                   {saving ? "Saving..." : "Save Blend"}
                 </button>
 
-                <button className="apexPillBtn apexPillBtnGold" type="button" onClick={addBlendToCartFromGenerated} disabled={!blend}>
+                <button disabled={loadingBlend} className="apexPillBtn apexPillBtnGold" type="button" onClick={addBlendToCartFromGenerated} disabled={!blend}>
                   Add to Cart
                 </button>
 
@@ -1201,7 +1203,7 @@ function MainApp() {
           <div className="apexCartBlock">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
               <div className="apexCartTitle">Cart</div>
-              <button className="apexPillBtn" type="button" onClick={clearCart} disabled={cart.length === 0}>
+              <button disabled={loadingBlend} className="apexPillBtn" type="button" onClick={clearCart} disabled={cart.length === 0}>
                 Clear
               </button>
             </div>
@@ -1221,7 +1223,7 @@ function MainApp() {
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       <div className="apexRecipeGrams">{Number(it.price)} EGP</div>
-                      <button className="apexModalClose" type="button" onClick={() => removeCartItem(it.id)} title="Remove">
+                      <button disabled={loadingBlend} className="apexModalClose" type="button" onClick={() => removeCartItem(it.id)} title="Remove">
                         ✕
                       </button>
                     </div>
@@ -1252,7 +1254,7 @@ function MainApp() {
 
             <GoogleMapsPicker value={location} onChange={setLocation} />
 
-            <button className="apexBtnGold" type="button" style={{ marginTop: 12 }} onClick={placeOrder} disabled={cart.length === 0}>
+            <button disabled={loadingBlend} className="apexBtnGold" type="button" style={{ marginTop: 12 }} onClick={placeOrder} disabled={cart.length === 0}>
               Place Order
             </button>
 
@@ -1268,7 +1270,7 @@ function MainApp() {
         <section className="apexSaved">
           <div className="apexSavedHead">
             <div className="apexSavedTitle">My Saved Blends</div>
-            <button className="apexPillBtn" type="button" onClick={loadSavedBlends}>
+            <button disabled={loadingBlend} className="apexPillBtn" type="button" onClick={loadSavedBlends}>
               {loadingSaved ? "Loading..." : "Refresh"}
             </button>
           </div>
@@ -1285,7 +1287,7 @@ function MainApp() {
                   </div>
                   <div className="apexSavedWhen">{b.created_at ? new Date(b.created_at).toLocaleString() : ""}</div>
 
-                  <button className="apexPillBtn apexPillBtnGold" type="button" style={{ marginTop: 10, width: "100%" }} onClick={() => addSavedBlendToCart(b)}>
+                  <button disabled={loadingBlend} className="apexPillBtn apexPillBtnGold" type="button" style={{ marginTop: 10, width: "100%" }} onClick={() => addSavedBlendToCart(b)}>
                     Add to Cart
                   </button>
                 </div>
@@ -1300,7 +1302,7 @@ function MainApp() {
         <section className="apexSaved">
           <div className="apexSavedHead">
             <div className="apexSavedTitle">My Orders</div>
-            <button className="apexPillBtn" type="button" onClick={loadMyOrders}>
+            <button disabled={loadingBlend} className="apexPillBtn" type="button" onClick={loadMyOrders}>
               {loadingOrders ? "Loading..." : "Refresh"}
             </button>
           </div>
@@ -1393,7 +1395,7 @@ function MainApp() {
           <div className="apexModalCard" onMouseDown={(e) => e.stopPropagation()}>
             <div className="apexModalTop">
               <div className="apexModalTitle">{user ? "Account" : "Login"}</div>
-              <button className="apexModalClose" type="button" onClick={() => setAuthOpen(false)}>
+              <button disabled={loadingBlend} className="apexModalClose" type="button" onClick={() => setAuthOpen(false)}>
                 ✕
               </button>
             </div>
@@ -1403,7 +1405,7 @@ function MainApp() {
                 <div className="apexAccountLine">
                   Signed in as: <b>{user.email || user.id}</b>
                 </div>
-                <button className="apexBtnGold" type="button" onClick={signOut}>
+                <button disabled={loadingBlend} className="apexBtnGold" type="button" onClick={signOut}>
                   Sign out
                 </button>
               </div>
