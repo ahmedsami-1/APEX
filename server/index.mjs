@@ -4,7 +4,7 @@ import OpenAI from "openai";
 import path from "path";
 import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
-
+import jwt from "jsonwebtoken";
 // ================== App setup ==================
 const app = express();
 
@@ -76,29 +76,29 @@ async function requireAdmin(req, res, next) {
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
 
     if (!token) return res.status(401).json({ error: "Missing bearer token" });
-    if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.SUPABASE_URL) {
-      return res
-        .status(500)
-        .json({ error: "Server missing Supabase admin env" });
+
+    const jwtSecret = process.env.SUPABASE_JWT_SECRET;
+    if (!jwtSecret) {
+      return res.status(500).json({ error: "Server missing SUPABASE_JWT_SECRET" });
     }
 
-    // Validate token using Supabase (server-side)
-    const { data, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !data?.user) {
-      return res.status(401).json({ error: "Invalid token" });
-    }
+    // Verify Supabase JWT
+    const payload = jwt.verify(token, jwtSecret);
 
-    const email = data.user.email || "";
+    const email = payload?.email || payload?.user_metadata?.email || "";
+    if (!email) return res.status(401).json({ error: "Invalid token (no email)" });
+
     if (!isAdminEmail(email)) {
       return res.status(403).json({ error: "Not admin" });
     }
 
-    req.adminUser = data.user;
+    req.adminUser = { id: payload.sub, email };
     next();
   } catch (e) {
-    res.status(500).json({ error: String(e?.message || e) });
+    return res.status(401).json({ error: "Invalid token" });
   }
 }
+
 
 // ================== Demo stock (بدّلها لاحقًا بـ DB) ==================
 const ORIGINS = [
