@@ -2653,21 +2653,32 @@ function MainApp() {
 
             {adminOriginsErr ? <div className="apexError">{adminOriginsErr}</div> : null}
 
-            {/* Add new origin */}
-            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
-              <div style={{ fontWeight: 900, opacity: 0.9 }}>Add new origin</div>
+            {/* Add new origin ... form fields above */}
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <div className="apexField">
-                  <div className="apexLabel">Origin code</div>
-                  <input
-                    className="apexInput"
-                    placeholder="e.g. ET_SIDAMO"
-                    value={newOrigin.code}
-                    onChange={(e) => setNewOrigin((p) => ({ ...p, code: e.target.value }))}
-                    disabled={!isAdmin}
-                  />
-                </div>
+<div
+  style={{
+    position: "sticky",
+    bottom: 10,
+    zIndex: 50,
+    paddingTop: 10,
+    background: "linear-gradient(to top, rgba(12,12,12,0.95), rgba(12,12,12,0))",
+  }}
+>
+  <button
+    className="apexBtnGold"
+    type="button"
+    onClick={adminAddOrigin}
+    disabled={!isAdmin}
+    style={{ width: "100%" }}
+  >
+    Insert Origin
+  </button>
+
+  <div className="apexTinyNote" style={{ marginTop: 6, opacity: 0.8 }}>
+    Insert بيضيف Origin جديد في DB بالـ code + stock + cost + sensory.
+  </div>
+</div>
+
 
                 <div className="apexField">
                   <div className="apexLabel">Display name</div>
