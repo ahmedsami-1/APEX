@@ -1459,12 +1459,17 @@ function MainApp() {
     }
   }
 
- async function getAccessToken() {
+async function getAccessToken() {
   const { data, error } = await supabase.auth.getSession();
-  if (error) throw error;
+  if (error) console.log("getSession error:", error);
+
   const token = data?.session?.access_token || null;
+  console.log("ADMIN token exists?", !!token);
+  if (token) console.log("ADMIN token prefix:", token.slice(0, 20));
+
   return token;
 }
+
 
 
 async function adminLoadOrders() {
@@ -1472,31 +1477,37 @@ async function adminLoadOrders() {
   setAdminLoading(true);
 
   try {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) throw error;
+    const token = await getAccessToken();
+    if (!token) throw new Error("Not logged in (no access_token)");
 
-    const token = data?.session?.access_token;
-    console.log("ADMIN token:", token ? token.slice(0, 20) + "..." : "NULL");
-
-    if (!token) throw new Error("Session missing");
+    console.log("ADMIN sending Authorization header…");
 
     const res = await fetch(apiUrl("/api/admin/orders?limit=200"), {
+      method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
       },
     });
 
-    const json = await res.json();
-    if (!res.ok) throw new Error(json.error || "Admin failed");
+    const ct = res.headers.get("content-type") || "";
+    const body = ct.includes("application/json")
+      ? await res.json().catch(() => ({}))
+      : await res.text();
 
-    setAdminOrders(json.orders || []);
+    if (!res.ok) {
+      const msg = typeof body === "string" ? body.slice(0, 200) : (body?.error || "Failed");
+      throw new Error(msg);
+    }
+
+    setAdminOrders(body.orders || []);
   } catch (e) {
-    console.error("ADMIN ERROR", e);
-    setAdminErr(String(e.message || e));
+    console.log("ADMIN ERROR:", e);
+    setAdminErr(String(e?.message || e));
   } finally {
     setAdminLoading(false);
   }
 }
+
 
 
 
