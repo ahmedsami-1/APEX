@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "./apex.css";
 
 import { supabase } from "./supabaseClient";
@@ -120,7 +120,7 @@ function statusClass(s) {
    Tiny Production UX helpers
    ========================= */
 
-function Stepper({ step, onJump }) {
+function Stepper({ step, onJump, stickyEnabled = true, topOffset = 12 }) {
   const steps = [
     { k: 1, t: "Preferences" },
     { k: 2, t: "Review" },
@@ -141,6 +141,11 @@ function Stepper({ step, onJump }) {
         border: "1px solid rgba(255,255,255,0.10)",
         background: "rgba(255,255,255,0.04)",
         marginTop: 12,
+        position: stickyEnabled ? "sticky" : "static",
+        top: stickyEnabled ? topOffset : undefined,
+        zIndex: stickyEnabled ? 30 : undefined,
+        backdropFilter: stickyEnabled ? "blur(10px)" : undefined,
+        boxShadow: stickyEnabled ? "0 12px 32px rgba(0,0,0,0.28)" : undefined,
       }}
     >
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -744,6 +749,159 @@ function AuthCallbackInline() {
   );
 }
 
+function QuickNav({
+  onBuilder,
+  onCheckout,
+  onSaved,
+  onOrders,
+  onTop,
+  hasSaved,
+  hasOrders,
+  cartCount,
+  compact = false,
+  hidden = false,
+}) {
+  const [open, setOpen] = useState(!compact);
+
+  useEffect(() => {
+    setOpen(!compact);
+  }, [compact]);
+
+  if (hidden) return null;
+
+  const items = [
+    { key: "builder", label: "Blend Builder", onClick: onBuilder, hint: "1" },
+    {
+      key: "checkout",
+      label: cartCount ? `Checkout (${cartCount})` : "Checkout",
+      onClick: onCheckout,
+      hint: "2",
+    },
+    hasSaved
+      ? { key: "saved", label: "Saved blends", onClick: onSaved, hint: "3" }
+      : null,
+    hasOrders
+      ? { key: "orders", label: "My orders", onClick: onOrders, hint: "4" }
+      : null,
+  ].filter(Boolean);
+
+  if (compact && !open) {
+    return (
+      <div
+        style={{
+          position: "fixed",
+          right: 14,
+          bottom: 14,
+          zIndex: 35,
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
+        }}
+      >
+        <button
+          type="button"
+          className="apexPillBtn apexPillBtnGold"
+          onClick={() => setOpen(true)}
+          style={{
+            padding: "12px 14px",
+            borderRadius: 999,
+            boxShadow: "0 14px 36px rgba(0,0,0,0.35)",
+          }}
+        >
+          Menu &amp; Checkout
+        </button>
+        <button
+          type="button"
+          className="apexPillBtn"
+          onClick={onCheckout}
+          style={{ borderRadius: 999 }}
+        >
+          Checkout {cartCount ? `(${cartCount})` : ""}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        right: 14,
+        bottom: 14,
+        display: "grid",
+        gap: 8,
+        padding: "12px 14px",
+        borderRadius: 14,
+        border: "1px solid rgba(255,255,255,0.10)",
+        background: "rgba(12,12,12,0.82)",
+        boxShadow: "0 14px 36px rgba(0,0,0,0.35)",
+        zIndex: 35,
+        width: compact ? 220 : 240,
+        maxWidth: compact ? "90vw" : "calc(100% - 20px)",
+        backdropFilter: "blur(12px)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ fontSize: 12, opacity: 0.85, fontWeight: 900, flex: "1 1 auto" }}>
+          Quick navigation
+        </div>
+        {compact ? (
+          <button
+            type="button"
+            className="apexModalClose"
+            onClick={() => setOpen(false)}
+            title="Hide navigation"
+          >
+            ✕
+          </button>
+        ) : null}
+      </div>
+
+      <div style={{ display: "grid", gap: 6 }}>
+        {items.map((it) => (
+          <button
+            key={it.key}
+            type="button"
+            className="apexPillBtn"
+            onClick={it.onClick}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              width: "100%",
+              padding: "10px 12px",
+            }}
+          >
+            <span>{it.label}</span>
+            {it.hint ? (
+              <span
+                style={{
+                  fontSize: 11,
+                  opacity: 0.75,
+                  padding: "2px 8px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.15)",
+                }}
+              >
+                {it.hint}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        className="apexPillBtn apexPillBtnGold"
+        onClick={onTop}
+        style={{ width: "100%", padding: "10px 12px" }}
+      >
+        Back to top
+      </button>
+    </div>
+  );
+}
+
 function AppShell() {
   const path = typeof window !== "undefined" ? window.location.pathname : "";
   const isCallbackPath = path === "/auth/callback";
@@ -764,6 +922,7 @@ function MainApp() {
 
   // Stepper
   const [step, setStep] = useState(1); // 1 prefs, 2 review, 3 checkout, 4 done
+  const [isCompact, setIsCompact] = useState(false);
 
   // Admin
   const [adminOpen, setAdminOpen] = useState(false);
@@ -803,6 +962,7 @@ function MainApp() {
   const [customerPhone, setCustomerPhone] = useState("");
   const [customerAddress, setCustomerAddress] = useState("");
   const [customerNotes, setCustomerNotes] = useState("");
+  const [placingOrder, setPlacingOrder] = useState(false);
 
   // Location (Google Maps pin)
   const [location, setLocation] = useState({
@@ -824,6 +984,7 @@ function MainApp() {
 
   const builderRef = useRef(null);
   const checkoutRef = useRef(null);
+  const savedRef = useRef(null);
   const ordersRef = useRef(null);
 
   const headline = useMemo(() => {
@@ -868,14 +1029,91 @@ function MainApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const updateCompact = () => setIsCompact(window.innerWidth < 720);
+    updateCompact();
+    window.addEventListener("resize", updateCompact);
+    return () => window.removeEventListener("resize", updateCompact);
+  }, []);
+
+  const scrollOpts = useMemo(() => ({ behavior: "smooth", block: "start" }), []);
+
+  const scrollToBuilder = useCallback(() => {
+    builderRef.current?.scrollIntoView?.(scrollOpts);
+  }, [scrollOpts]);
+
+  const scrollToCheckout = useCallback(() => {
+    checkoutRef.current?.scrollIntoView?.(scrollOpts);
+  }, [scrollOpts]);
+
+  const scrollToSaved = useCallback(() => {
+    savedRef.current?.scrollIntoView?.(scrollOpts);
+  }, [scrollOpts]);
+
+  const scrollToOrders = useCallback(() => {
+    ordersRef.current?.scrollIntoView?.(scrollOpts);
+  }, [scrollOpts]);
+
+  const scrollToTop = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
+
   function jumpToStep(k) {
     setStep(k);
-    const opts = { behavior: "smooth", block: "start" };
-    if (k === 1) builderRef.current?.scrollIntoView?.(opts);
-    if (k === 2) builderRef.current?.scrollIntoView?.(opts);
-    if (k === 3) checkoutRef.current?.scrollIntoView?.(opts);
-    if (k === 4) ordersRef.current?.scrollIntoView?.(opts);
+    if (k === 1 || k === 2) scrollToBuilder();
+    if (k === 3) scrollToCheckout();
+    if (k === 4) scrollToOrders();
   }
+
+  useEffect(() => {
+    function handleShortcut(e) {
+      if (e.altKey || e.metaKey || e.ctrlKey) return;
+      if (authOpen || adminOpen) return;
+      const tag = (document.activeElement?.tagName || "").toLowerCase();
+      const isTyping =
+        ["input", "textarea", "select", "option"].includes(tag) ||
+        document.activeElement?.isContentEditable;
+      if (isTyping) return;
+
+      if (e.key === "1") {
+        e.preventDefault();
+        setStep(1);
+        scrollToBuilder();
+      }
+      if (e.key === "2") {
+        e.preventDefault();
+        setStep(3);
+        scrollToCheckout();
+      }
+      if (e.key === "3" && user) {
+        e.preventDefault();
+        scrollToSaved();
+      }
+      if (e.key === "4" && user) {
+        e.preventDefault();
+        setStep(4);
+        scrollToOrders();
+      }
+      if (e.key?.toLowerCase?.() === "t") {
+        e.preventDefault();
+        scrollToTop();
+      }
+    }
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [
+    scrollToBuilder,
+    scrollToCheckout,
+    scrollToOrders,
+    scrollToSaved,
+    scrollToTop,
+    user,
+    authOpen,
+    adminOpen,
+  ]);
 
   async function fetchBlend() {
     setBlendErr("");
@@ -1043,6 +1281,7 @@ function MainApp() {
   }
 
   async function placeOrder() {
+    if (placingOrder) return;
     if (!user) {
       setAuthOpen(true);
       alert("Login required to place orders.");
@@ -1064,6 +1303,7 @@ function MainApp() {
     }
 
     try {
+      setPlacingOrder(true);
       const orderTotal = cartTotal(cart);
 
       const fallbackMapsUrl =
@@ -1167,6 +1407,8 @@ function MainApp() {
     } catch (e) {
       console.error(e);
       alert(String(e?.message || e));
+    } finally {
+      setPlacingOrder(false);
     }
   }
 
@@ -1217,32 +1459,46 @@ function MainApp() {
     }
   }
 
-  async function getAccessToken() {
-    const { data } = await supabase.auth.getSession();
-    return data?.session?.access_token || null;
+ async function getAccessToken() {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  const token = data?.session?.access_token || null;
+  return token;
+}
+
+
+async function adminLoadOrders() {
+  setAdminErr("");
+  setAdminLoading(true);
+
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+
+    const token = data?.session?.access_token;
+    console.log("ADMIN token:", token ? token.slice(0, 20) + "..." : "NULL");
+
+    if (!token) throw new Error("Session missing");
+
+    const res = await fetch(apiUrl("/api/admin/orders?limit=200"), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Admin failed");
+
+    setAdminOrders(json.orders || []);
+  } catch (e) {
+    console.error("ADMIN ERROR", e);
+    setAdminErr(String(e.message || e));
+  } finally {
+    setAdminLoading(false);
   }
+}
 
-  async function adminLoadOrders() {
-    setAdminErr("");
-    setAdminLoading(true);
-    try {
-      const token = await getAccessToken();
-      if (!token) throw new Error("Not logged in");
 
-      const res = await fetch(apiUrl("/api/admin/orders?limit=200"), {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || "Failed to load admin orders");
-
-      setAdminOrders(data.orders || []);
-    } catch (e) {
-      setAdminErr(String(e?.message || e));
-    } finally {
-      setAdminLoading(false);
-    }
-  }
 
   async function adminSetStatus(orderId, nextStatus) {
     setAdminUpdatingId(orderId);
@@ -1309,7 +1565,15 @@ function MainApp() {
   }, [adminOrders, adminQ, adminStatusFilter]);
 
   const themeClass = line === "premium" ? "apexThemePremium" : "apexThemeDaily";
-  const redirectTo = `${window.location.origin}/auth/callback`;
+  const redirectTo =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/auth/callback`
+      : "/auth/callback";
+  const hasRequiredDetails =
+    customerName.trim() && customerPhone.trim() && customerAddress.trim();
+  const hasLocation = !!(location?.lat && location?.lng);
+  const canPlaceOrder = cart.length > 0 && hasRequiredDetails && hasLocation && !placingOrder;
+  const quickNavHidden = authOpen || adminOpen;
 
   return (
     <div className={`apexApp ${themeClass}`}>
@@ -1361,7 +1625,12 @@ function MainApp() {
 
       <div className="apexSubline">{headline.micro}</div>
 
-      <Stepper step={step} onJump={jumpToStep} />
+      <Stepper
+        step={step}
+        onJump={jumpToStep}
+        stickyEnabled={!isCompact}
+        topOffset={isCompact ? 0 : 72}
+      />
 
       {/* ===== Hero ===== */}
       <section className="apexHero">
@@ -1733,10 +2002,16 @@ function MainApp() {
               type="button"
               style={{ marginTop: 12 }}
               onClick={placeOrder}
-              disabled={cart.length === 0}
+              disabled={!canPlaceOrder}
             >
-              Place Order (Cash on Delivery)
+              {placingOrder ? "Placing order…" : "Place Order (Cash on Delivery)"}
             </button>
+
+            {!hasRequiredDetails || !hasLocation ? (
+              <div className="apexTinyNote" style={{ marginTop: 6, opacity: 0.8 }}>
+                Fill name, phone, address and drop a pin to enable checkout.
+              </div>
+            ) : null}
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
               Orders are saved with full details + items + recipe + Google location pin.
@@ -1747,7 +2022,7 @@ function MainApp() {
 
       {/* ===== Saved blends ===== */}
       {user ? (
-        <section className="apexSaved">
+        <section className="apexSaved" ref={savedRef}>
           <div className="apexSavedHead">
             <div className="apexSavedTitle">My Saved Blends</div>
             <button className="apexPillBtn" type="button" onClick={loadSavedBlends}>
@@ -1901,6 +2176,19 @@ function MainApp() {
           )}
         </section>
       ) : null}
+
+      <QuickNav
+        onBuilder={scrollToBuilder}
+        onCheckout={scrollToCheckout}
+        onSaved={user ? scrollToSaved : undefined}
+        onOrders={user ? scrollToOrders : undefined}
+        onTop={scrollToTop}
+        hasSaved={!!user}
+        hasOrders={!!user}
+        cartCount={cart.length}
+        compact={isCompact}
+        hidden={quickNavHidden}
+      />
 
       {/* ===== Admin Modal (Admin Panel) ===== */}
       {adminOpen ? (
