@@ -2653,122 +2653,160 @@ function MainApp() {
 
             {adminOriginsErr ? <div className="apexError">{adminOriginsErr}</div> : null}
 
-            {/* Add new origin ... form fields above */}
+           {/* ===== Stock Manager ===== */}
+<div className="apexCardDivider" style={{ margin: "14px 0" }} />
 
-<div
-  style={{
-    position: "sticky",
-    bottom: 10,
-    zIndex: 50,
-    paddingTop: 10,
-    background: "linear-gradient(to top, rgba(12,12,12,0.95), rgba(12,12,12,0))",
-  }}
->
-  <button
-    className="apexBtnGold"
-    type="button"
-    onClick={adminAddOrigin}
-    disabled={!isAdmin}
-    style={{ width: "100%" }}
-  >
-    Insert Origin
-  </button>
-
-  <div className="apexTinyNote" style={{ marginTop: 6, opacity: 0.8 }}>
-    Insert بيضيف Origin جديد في DB بالـ code + stock + cost + sensory.
+<div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+  <div style={{ fontWeight: 950 }}>Stock Manager</div>
+  <div className="apexTinyNote" style={{ opacity: 0.85 }}>
+    Edit stock / cost, enable/disable, and add new origins.
   </div>
 </div>
 
+{adminOriginsErr ? <div className="apexError">{adminOriginsErr}</div> : null}
 
-                <div className="apexField">
-                  <div className="apexLabel">Display name</div>
-                  <input
-                    className="apexInput"
-                    placeholder="e.g. Ethiopia Sidamo"
-                    value={newOrigin.name}
-                    onChange={(e) => setNewOrigin((p) => ({ ...p, name: e.target.value }))}
-                    disabled={!isAdmin}
-                  />
-                </div>
+{/* ===== Add new origin ===== */}
+<div
+  style={{
+    marginTop: 12,
+    display: "grid",
+    gap: 10,
+    border: "1px solid rgba(255,255,255,0.10)",
+    borderRadius: 16,
+    padding: 12,
+    background: "rgba(255,255,255,0.03)",
+  }}
+>
+  <div className="apexTinyNote" style={{ opacity: 0.9, fontWeight: 900 }}>
+    Add new origin (code must be unique)
+  </div>
 
-                <div className="apexField">
-                  <div className="apexLabel">Stock (grams)</div>
-                  <input
-                    className="apexInput"
-                    type="number"
-                    placeholder="stock_g"
-                    value={Number(newOrigin.stock_g || 0)}
-                    onChange={(e) =>
-                      setNewOrigin((p) => ({
-                        ...p,
-                        stock_g: parseInt(e.target.value || "0", 10),
-                      }))
-                    }
-                    disabled={!isAdmin}
-                  />
-                </div>
+  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
+    <div className="apexField">
+      <div className="apexLabel">Origin code</div>
+      <input
+        className="apexInput"
+        placeholder="e.g. ETH_SIDAMO"
+        value={newOrigin.code}
+        onChange={(e) => setNewOrigin((p) => ({ ...p, code: e.target.value }))}
+        disabled={!isAdmin}
+      />
+      <div className="apexTinyNote" style={{ opacity: 0.8, marginTop: 6 }}>
+        Must be unique. Used by AI + recipe rows.
+      </div>
+    </div>
 
-                <div className="apexField">
-                  <div className="apexLabel">Cost per gram</div>
-                  <input
-                    className="apexInput"
-                    type="number"
-                    step="0.01"
-                    placeholder="cost_per_g"
-                    value={Number(newOrigin.cost_per_g || 0)}
-                    onChange={(e) =>
-                      setNewOrigin((p) => ({
-                        ...p,
-                        cost_per_g: Number(e.target.value || "0"),
-                      }))
-                    }
-                    disabled={!isAdmin}
-                  />
-                </div>
-              </div>
+    <div className="apexField">
+      <div className="apexLabel">Display name</div>
+      <input
+        className="apexInput"
+        placeholder="e.g. Ethiopia Sidamo"
+        value={newOrigin.name}
+        onChange={(e) => setNewOrigin((p) => ({ ...p, name: e.target.value }))}
+        disabled={!isAdmin}
+      />
+    </div>
 
-              <div className="apexField">
-                <div className="apexLabel">Notes (CSV)</div>
-                <input
-                  className="apexInput"
-                  placeholder='Example: chocolate,nuts,floral'
-                  value={newOrigin.notesCsv}
-                  onChange={(e) => setNewOrigin((p) => ({ ...p, notesCsv: e.target.value }))}
-                  disabled={!isAdmin}
-                />
-              </div>
+    <div className="apexField">
+      <div className="apexLabel">Stock (grams)</div>
+      <input
+        className="apexInput"
+        type="number"
+        placeholder="stock_g"
+        value={Number(newOrigin.stock_g || 0)}
+        onChange={(e) =>
+          setNewOrigin((p) => ({
+            ...p,
+            stock_g: parseInt(e.target.value || "0", 10),
+          }))
+        }
+        disabled={!isAdmin}
+      />
+    </div>
 
-              <div className="apexTinyNote" style={{ opacity: 0.85 }}>
-                Sensory scores are 1..10 (used by AI for matching, not “fake tasting claims”).
-              </div>
+    <div className="apexField">
+      <div className="apexLabel">Cost per gram</div>
+      <input
+        className="apexInput"
+        type="number"
+        step="0.01"
+        placeholder="cost_per_g"
+        value={Number(newOrigin.cost_per_g || 0)}
+        onChange={(e) =>
+          setNewOrigin((p) => ({
+            ...p,
+            cost_per_g: Number(e.target.value || "0"),
+          }))
+        }
+        disabled={!isAdmin}
+      />
+    </div>
+  </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-                {sensoryKeys.map((k) => (
-                  <div key={k} className="apexField">
-                    <div className="apexLabel">{sensoryLabels[k]}</div>
-                    <input
-                      className="apexInput"
-                      type="number"
-                      min="1"
-                      max="10"
-                      step="1"
-                      placeholder={k}
-                      value={Number(newOrigin[k] ?? 5)}
-                      onChange={(e) =>
-                        setNewOrigin((p) => ({ ...p, [k]: parseInt(e.target.value || "5", 10) }))
-                      }
-                      disabled={!isAdmin}
-                    />
-                  </div>
-                ))}
-              </div>
+  <div className="apexField">
+    <div className="apexLabel">Notes (CSV) (optional)</div>
+    <input
+      className="apexInput"
+      placeholder="Example: chocolate,nuts,floral"
+      value={newOrigin.notesCsv}
+      onChange={(e) => setNewOrigin((p) => ({ ...p, notesCsv: e.target.value }))}
+      disabled={!isAdmin}
+    />
+  </div>
 
-              <button className="apexBtnGold" type="button" onClick={adminAddOrigin} disabled={!isAdmin}>
-                Add Origin
-              </button>
-            </div>
+  <div className="apexTinyNote" style={{ opacity: 0.85 }}>
+    Sensory scores are 1..10 (used by AI for matching).
+  </div>
 
-            {/* List origins */}
+  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+    {sensoryKeys.map((k) => (
+      <div key={k} className="apexField">
+        <div className="apexLabel">{sensoryLabels[k]}</div>
+        <input
+          className="apexInput"
+          type="number"
+          min="1"
+          max="10"
+          step="1"
+          placeholder={k}
+          value={Number(newOrigin[k] ?? 5)}
+          onChange={(e) =>
+            setNewOrigin((p) => ({ ...p, [k]: parseInt(e.target.value || "5", 10) }))
+          }
+          disabled={!isAdmin}
+        />
+      </div>
+    ))}
+  </div>
+
+  {/* Sticky footer insert button */}
+  <div
+    style={{
+      position: "sticky",
+      bottom: 10,
+      zIndex: 50,
+      paddingTop: 10,
+      background:
+        "linear-gradient(to top, rgba(12,12,12,0.95), rgba(12,12,12,0))",
+    }}
+  >
+    <button
+      className="apexBtnGold"
+      type="button"
+      onClick={adminAddOrigin}
+      disabled={!isAdmin || !String(newOrigin.code || "").trim()}
+      style={{ width: "100%" }}
+      title={!String(newOrigin.code || "").trim() ? "Origin code is required" : ""}
+    >
+      Insert Origin
+    </button>
+
+    <div className="apexTinyNote" style={{ marginTop: 6, opacity: 0.8 }}>
+      Insert بيضيف Origin جديد في DB بالـ code + stock + cost + sensory.
+    </div>
+  </div>
+</div>
+
             <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
               {adminOrigins.length === 0 ? (
                 <div className="apexSavedEmpty">
