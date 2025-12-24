@@ -77,7 +77,9 @@ async function requireAdmin(req, res, next) {
 
     if (!token) return res.status(401).json({ error: "Missing bearer token" });
     if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.SUPABASE_URL) {
-      return res.status(500).json({ error: "Server missing Supabase admin env" });
+      return res
+        .status(500)
+        .json({ error: "Server missing Supabase admin env" });
     }
 
     // Validate token using Supabase (server-side)
@@ -100,11 +102,51 @@ async function requireAdmin(req, res, next) {
 
 // ================== Demo stock (بدّلها لاحقًا بـ DB) ==================
 const ORIGINS = [
-  { code: "BR_SANTOS", name: "Brazil Santos", maxGrams: 4000, costPerG: 0.85, notes: ["chocolate", "nuts", "caramel"], acidity: 3, body: 8 },
-  { code: "CO_SUPREMO", name: "Colombia Supremo", maxGrams: 3000, costPerG: 0.95, notes: ["caramel", "cocoa"], acidity: 6, body: 6 },
-  { code: "ET_YIRG", name: "Ethiopia Yirgacheffe", maxGrams: 1200, costPerG: 1.25, notes: ["floral", "citrus"], acidity: 8, body: 4 },
-  { code: "HN_CLASSIC", name: "Honduras Classic", maxGrams: 2500, costPerG: 0.9, notes: ["nuts", "cocoa"], acidity: 5, body: 6 },
-  { code: "ID_SUMATRA", name: "Indonesia Sumatra", maxGrams: 1100, costPerG: 1.05, notes: ["earthy", "dark-chocolate"], acidity: 3, body: 9 },
+  {
+    code: "BR_SANTOS",
+    name: "Brazil Santos",
+    maxGrams: 4000,
+    costPerG: 0.85,
+    notes: ["chocolate", "nuts", "caramel"],
+    acidity: 3,
+    body: 8,
+  },
+  {
+    code: "CO_SUPREMO",
+    name: "Colombia Supremo",
+    maxGrams: 3000,
+    costPerG: 0.95,
+    notes: ["caramel", "cocoa"],
+    acidity: 6,
+    body: 6,
+  },
+  {
+    code: "ET_YIRG",
+    name: "Ethiopia Yirgacheffe",
+    maxGrams: 1200,
+    costPerG: 1.25,
+    notes: ["floral", "citrus"],
+    acidity: 8,
+    body: 4,
+  },
+  {
+    code: "HN_CLASSIC",
+    name: "Honduras Classic",
+    maxGrams: 2500,
+    costPerG: 0.9,
+    notes: ["nuts", "cocoa"],
+    acidity: 5,
+    body: 6,
+  },
+  {
+    code: "ID_SUMATRA",
+    name: "Indonesia Sumatra",
+    maxGrams: 1100,
+    costPerG: 1.05,
+    notes: ["earthy", "dark-chocolate"],
+    acidity: 3,
+    body: 9,
+  },
 ];
 
 const PACKAGING_COST = 15;
@@ -206,7 +248,9 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
   fixed = fixed.slice(0, 5);
 
   if (fixed.length < 2) {
-    const sorted = [...originMap.values()].sort((a, b) => a.costPerG - b.costPerG);
+    const sorted = [...originMap.values()].sort(
+      (a, b) => a.costPerG - b.costPerG
+    );
     const cheapest = sorted[0];
     const second = sorted[1];
     if (cheapest && !used.has(cheapest.code))
@@ -247,10 +291,13 @@ app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.post("/api/recommend", async (req, res) => {
   try {
     const { size_g, line, preferences } = req.body || {};
-    if (!Number.isInteger(size_g) || size_g <= 0) throw new Error("size_g must be positive int");
-    if (line !== "daily" && line !== "premium") throw new Error("line must be daily|premium");
+    if (!Number.isInteger(size_g) || size_g <= 0)
+      throw new Error("size_g must be positive int");
+    if (line !== "daily" && line !== "premium")
+      throw new Error("line must be daily|premium");
     if (!preferences) throw new Error("preferences required");
-    if (!process.env.OPENAI_API_KEY) throw new Error("Server missing OPENAI_API_KEY");
+    if (!process.env.OPENAI_API_KEY)
+      throw new Error("Server missing OPENAI_API_KEY");
 
     const originMap = new Map(ORIGINS.map((o) => [o.code, o]));
 
@@ -278,7 +325,9 @@ Line:
     let lastError = null;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
-      const system = systemBase + (lastError ? `\nPrevious attempt failed: ${lastError}\nFix it.` : "");
+      const system =
+        systemBase +
+        (lastError ? `\nPrevious attempt failed: ${lastError}\nFix it.` : "");
 
       const r = await openai.responses.create({
         model: "gpt-4.1-mini",
@@ -299,7 +348,10 @@ Line:
 
         validateStrict(recipe, size_g, originMap);
 
-        const strictRecipe = recipe.map((x) => ({ origin_code: x.origin_code, grams: x.grams }));
+        const strictRecipe = recipe.map((x) => ({
+          origin_code: x.origin_code,
+          grams: x.grams,
+        }));
         const pricing = priceBlend(strictRecipe, originMap);
 
         return res.json({
@@ -360,10 +412,11 @@ app.get("/api/admin/orders", requireAdmin, async (req, res) => {
       .from("orders")
       .select(
         `
-        id, created_at, status, payment,
+        id, user_id,
+        created_at, updated_at,
+        status, payment,
         customer_name, customer_phone, customer_address, customer_notes,
         currency, total,
-        user_id,
         preferences,
         location_mode, location_lat, location_lng, location_address, location_maps_url, location_place_id,
         location_snapshot
@@ -380,7 +433,7 @@ app.get("/api/admin/orders", requireAdmin, async (req, res) => {
     if (orderIds.length) {
       const { data: items, error: itemsErr } = await supabaseAdmin
         .from("order_items")
-        .select("id, order_id, title, line, size_g, price, recipe, meta")
+        .select("id, order_id, created_at, title, line, size_g, price, recipe, meta")
         .in("order_id", orderIds);
 
       if (itemsErr) return res.status(400).json({ error: itemsErr.message });
@@ -405,29 +458,31 @@ app.get("/api/admin/orders", requireAdmin, async (req, res) => {
 
 /**
  * PATCH /api/admin/orders/:id/status
- * body: { status: "new" | "in_progress" | "delivering" | "delivered" }
+ * body: { status: "new" | "in_progress" | "delivering" | "delivered" | "cancelled" }
  */
 app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
     const { status } = req.body || {};
 
-    const allowed = ["new", "in_progress", "delivering", "delivered"];
-    if (!allowed.includes(status))
+    // ✅ مطابق للـSQL الجديد (فيه cancelled)
+    const allowed = ["new", "in_progress", "delivering", "delivered", "cancelled"];
+    if (!allowed.includes(status)) {
       return res.status(400).json({ error: "Invalid status" });
+    }
 
     const { data, error } = await supabaseAdmin
       .from("orders")
       .update({
         status,
-        // optional audit info if you want to store it later:
-        // updated_at: new Date().toISOString(),
-        // status_updated_by: req.adminUser?.email || null,
+        // updated_at will auto-update via trigger
       })
       .eq("id", id)
       .select(
         `
-        id, status, created_at,
+        id, user_id,
+        created_at, updated_at,
+        status,
         customer_name, customer_phone, customer_address,
         currency, total
       `
@@ -457,4 +512,6 @@ app.get(/^(?!\/api).*/, (req, res) => {
 
 // ================== Start ==================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log("Backend running: http://localhost:" + PORT));
+app.listen(PORT, () =>
+  console.log("Backend running: http://localhost:" + PORT)
+);

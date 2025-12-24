@@ -12,9 +12,9 @@ import { ThemeSupa } from "@supabase/auth-ui-shared";
  */
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
-function apiUrl(path) {
-  if (!API_BASE) return path;
-  return `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;
+function apiUrl(p) {
+  if (!API_BASE) return p;
+  return `${API_BASE}${p.startsWith("/") ? "" : "/"}${p}`;
 }
 
 const DEFAULT_PREFS = {
@@ -69,7 +69,13 @@ function safeText(v) {
 }
 
 function makeId(prefix = "id") {
-  return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+  return (
+    prefix +
+    "_" +
+    Date.now().toString(36) +
+    "_" +
+    Math.random().toString(36).slice(2, 8)
+  );
 }
 
 function cartTotal(items) {
@@ -86,6 +92,8 @@ function prettyStatus(s) {
       return "DELIVERING";
     case "delivered":
       return "DELIVERED";
+    case "cancelled":
+      return "CANCELLED";
     default:
       return safeText(s).toUpperCase();
   }
@@ -101,6 +109,8 @@ function statusClass(s) {
       return "apexStatusDelivering";
     case "delivered":
       return "apexStatusDelivered";
+    case "cancelled":
+      return "apexStatusCancelled";
     default:
       return "";
   }
@@ -179,8 +189,9 @@ function OrderTimeline({ status }) {
     in_progress: 2,
     delivering: 3,
     delivered: 4,
+    cancelled: 0,
   };
-  const step = map[status] || 1;
+  const step = map[status] ?? 1;
 
   const items = [
     { k: 1, t: "NEW" },
@@ -189,22 +200,48 @@ function OrderTimeline({ status }) {
     { k: 4, t: "DELIVERED" },
   ];
 
+  if (status === "cancelled") {
+    return (
+      <div style={{ marginTop: 10, fontSize: 12, fontWeight: 900, opacity: 0.85 }}>
+        Order cancelled.
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 10 }}>
       {items.map((it) => {
         const on = it.k <= step;
         return (
-          <div key={it.k} style={{ display: "flex", alignItems: "center", gap: 8, opacity: on ? 1 : 0.45 }}>
+          <div
+            key={it.k}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              opacity: on ? 1 : 0.45,
+            }}
+          >
             <div
               style={{
                 width: 10,
                 height: 10,
                 borderRadius: 999,
                 border: "1px solid rgba(255,255,255,0.20)",
-                background: on ? "rgba(255,255,255,0.70)" : "rgba(255,255,255,0.20)",
+                background: on
+                  ? "rgba(255,255,255,0.70)"
+                  : "rgba(255,255,255,0.20)",
               }}
             />
-            <div style={{ width: 18, height: 2, background: on ? "rgba(255,255,255,0.45)" : "rgba(255,255,255,0.12)" }} />
+            <div
+              style={{
+                width: 18,
+                height: 2,
+                background: on
+                  ? "rgba(255,255,255,0.45)"
+                  : "rgba(255,255,255,0.12)",
+              }}
+            />
             <div style={{ fontSize: 12, fontWeight: 800 }}>{it.t}</div>
           </div>
         );
@@ -223,7 +260,8 @@ const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "";
 
 /** Load Google Maps JS API (no external npm deps) */
 function loadGoogleMapsOnce() {
-  if (!GMAPS_KEY) return Promise.reject(new Error("Missing VITE_GOOGLE_MAPS_API_KEY"));
+  if (!GMAPS_KEY)
+    return Promise.reject(new Error("Missing VITE_GOOGLE_MAPS_API_KEY"));
   if (typeof window === "undefined") return Promise.reject(new Error("No window"));
   if (window.google?.maps) return Promise.resolve(window.google);
 
@@ -233,7 +271,9 @@ function loadGoogleMapsOnce() {
     const existing = document.querySelector("script[data-apex-gmaps='1']");
     if (existing) {
       existing.addEventListener("load", () => resolve(window.google));
-      existing.addEventListener("error", () => reject(new Error("Failed to load Google Maps")));
+      existing.addEventListener("error", () =>
+        reject(new Error("Failed to load Google Maps"))
+      );
       return;
     }
 
@@ -294,7 +334,8 @@ function GoogleMapsPicker({ value, onChange }) {
 
   const defaultCenter = useMemo(() => {
     const fallback = { lat: 30.0444, lng: 31.2357 }; // Cairo default
-    if (value?.lat && value?.lng) return { lat: Number(value.lat), lng: Number(value.lng) };
+    if (value?.lat && value?.lng)
+      return { lat: Number(value.lat), lng: Number(value.lng) };
     return fallback;
   }, [value?.lat, value?.lng]);
 
@@ -317,7 +358,9 @@ function GoogleMapsPicker({ value, onChange }) {
   }, []);
 
   function buildMapsUrl(lat, lng) {
-    return `https://www.google.com/maps?q=${encodeURIComponent(Number(lat))},${encodeURIComponent(Number(lng))}`;
+    return `https://www.google.com/maps?q=${encodeURIComponent(
+      Number(lat)
+    )},${encodeURIComponent(Number(lng))}`;
   }
 
   // ✅ main setter: always writes back {lat,lng,address,maps_url,place_id,mode}
@@ -366,10 +409,14 @@ function GoogleMapsPicker({ value, onChange }) {
         }
 
         const addr =
-          status === "OK" && results && results.length ? results[0].formatted_address : "";
+          status === "OK" && results && results.length
+            ? results[0].formatted_address
+            : "";
 
         const pid =
-          status === "OK" && results && results.length ? results[0].place_id || null : null;
+          status === "OK" && results && results.length
+            ? results[0].place_id || null
+            : null;
 
         if (status === "REQUEST_DENIED") {
           setErr(
@@ -385,7 +432,7 @@ function GoogleMapsPicker({ value, onChange }) {
           lng: pos.lng,
           address: String(addr || (value?.address || "")),
           maps_url: mapsUrl,
-          place_id: pid ? String(pid) : (value?.place_id || null),
+          place_id: pid ? String(pid) : value?.place_id || null,
           mode: nextMode,
         });
 
@@ -567,16 +614,38 @@ function GoogleMapsPicker({ value, onChange }) {
     <div style={{ display: "grid", gap: 10 }}>
       {err ? <div className="apexError">{err}</div> : null}
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <button className="apexPillBtn apexPillBtnGold" type="button" onClick={useMyLocation} disabled={busy}>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+          alignItems: "center",
+        }}
+      >
+        <button
+          className="apexPillBtn apexPillBtnGold"
+          type="button"
+          onClick={useMyLocation}
+          disabled={busy}
+        >
           {busy && mode === "current" ? "Detecting..." : "My current location"}
         </button>
 
-        <button className="apexPillBtn" type="button" onClick={deliverToAnotherLocation} disabled={busy}>
+        <button
+          className="apexPillBtn"
+          type="button"
+          onClick={deliverToAnotherLocation}
+          disabled={busy}
+        >
           Deliver to another location
         </button>
 
-        <button className="apexPillBtn" type="button" onClick={openGoogleMapsAtPin} disabled={!value?.lat || !value?.lng}>
+        <button
+          className="apexPillBtn"
+          type="button"
+          onClick={openGoogleMapsAtPin}
+          disabled={!value?.lat || !value?.lng}
+        >
           Open in Google Maps
         </button>
 
@@ -618,7 +687,9 @@ function GoogleMapsPicker({ value, onChange }) {
           lat: {Number(value.lat).toFixed(6)} | lng: {Number(value.lng).toFixed(6)}
         </div>
       ) : (
-        <div className="apexTinyNote" style={{ opacity: 0.75 }}>No location selected yet.</div>
+        <div className="apexTinyNote" style={{ opacity: 0.75 }}>
+          No location selected yet.
+        </div>
       )}
     </div>
   );
@@ -694,7 +765,7 @@ function MainApp() {
   // Stepper
   const [step, setStep] = useState(1); // 1 prefs, 2 review, 3 checkout, 4 done
 
-  // Admin (RLS-safe via server endpoints)
+  // Admin
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminOrders, setAdminOrders] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -718,7 +789,7 @@ function MainApp() {
   const [blend, setBlend] = useState(null);
   const [blendErr, setBlendErr] = useState("");
 
-  // Save blends
+  // Save blends (legacy table, لو مش موجودة هتطلع errors في الكونسل)
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [savedBlends, setSavedBlends] = useState([]);
@@ -759,7 +830,8 @@ function MainApp() {
     return {
       titleA: "Purebred Power.",
       titleB: "Pure Arabica.",
-      subtitle: "AI-crafted blends based on your taste and routine. Your coffee. Your signature.",
+      subtitle:
+        "AI-crafted blends based on your taste and routine. Your coffee. Your signature.",
       micro: "Your blend. Your identity. Crafted by AI, roasted by APEX.",
     };
   }, []);
@@ -836,7 +908,14 @@ function MainApp() {
 
       setBlend(data);
       setStep(2);
-      setTimeout(() => builderRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
+      setTimeout(
+        () =>
+          builderRef.current?.scrollIntoView?.({
+            behavior: "smooth",
+            block: "start",
+          }),
+        150
+      );
     } catch (e) {
       setBlendErr(String(e?.message || e));
     } finally {
@@ -921,7 +1000,14 @@ function MainApp() {
 
     setCart((prev) => [item, ...prev]);
     setStep(3);
-    setTimeout(() => checkoutRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
+    setTimeout(
+      () =>
+        checkoutRef.current?.scrollIntoView?.({
+          behavior: "smooth",
+          block: "start",
+        }),
+      150
+    );
   }
 
   function addSavedBlendToCart(b) {
@@ -938,7 +1024,14 @@ function MainApp() {
 
     setCart((prev) => [item, ...prev]);
     setStep(3);
-    setTimeout(() => checkoutRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
+    setTimeout(
+      () =>
+        checkoutRef.current?.scrollIntoView?.({
+          behavior: "smooth",
+          block: "start",
+        }),
+      150
+    );
   }
 
   function removeCartItem(id) {
@@ -975,9 +1068,9 @@ function MainApp() {
 
       const fallbackMapsUrl =
         location?.lat && location?.lng
-          ? `https://www.google.com/maps?q=${encodeURIComponent(Number(location.lat))},${encodeURIComponent(
-              Number(location.lng)
-            )}`
+          ? `https://www.google.com/maps?q=${encodeURIComponent(
+              Number(location.lat)
+            )},${encodeURIComponent(Number(location.lng))}`
           : null;
 
       const preferencesSnapshot = {
@@ -1022,8 +1115,12 @@ function MainApp() {
             location_lat: Number(location.lat),
             location_lng: Number(location.lng),
             location_address: location.address ? String(location.address) : null,
-            location_maps_url: location.maps_url ? String(location.maps_url) : fallbackMapsUrl,
-            location_place_id: location.place_id ? String(location.place_id) : null,
+            location_maps_url: location.maps_url
+              ? String(location.maps_url)
+              : fallbackMapsUrl,
+            location_place_id: location.place_id
+              ? String(location.place_id)
+              : null,
             location_snapshot: locationSnapshot,
           },
         ])
@@ -1059,7 +1156,14 @@ function MainApp() {
       await loadMyOrders();
 
       setStep(4);
-      setTimeout(() => ordersRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" }), 150);
+      setTimeout(
+        () =>
+          ordersRef.current?.scrollIntoView?.({
+            behavior: "smooth",
+            block: "start",
+          }),
+        150
+      );
     } catch (e) {
       console.error(e);
       alert(String(e?.message || e));
@@ -1075,7 +1179,7 @@ function MainApp() {
       const { data: ords, error: ordErr } = await supabase
         .from("orders")
         .select(
-          "id, created_at, status, payment, customer_name, customer_phone, customer_address, customer_notes, currency, total, location_lat, location_lng, location_address, location_maps_url, location_place_id"
+          "id, created_at, updated_at, status, payment, customer_name, customer_phone, customer_address, customer_notes, currency, total, location_lat, location_lng, location_address, location_maps_url, location_place_id"
         )
         .order("created_at", { ascending: false })
         .limit(20);
@@ -1088,7 +1192,7 @@ function MainApp() {
       if (orderIds.length) {
         const { data: items, error: itemsErr } = await supabase
           .from("order_items")
-          .select("id, order_id, title, line, size_g, price, recipe")
+          .select("id, order_id, title, line, size_g, price, recipe, meta, created_at")
           .in("order_id", orderIds);
 
         if (itemsErr) throw itemsErr;
@@ -1159,8 +1263,15 @@ function MainApp() {
       if (!res.ok) throw new Error(data?.error || "Failed to update status");
 
       const updated = data.order;
-      setAdminOrders((prev) => prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o)));
-      if (adminSelected?.id === updated.id) setAdminSelected((s) => (s ? { ...s, ...updated } : s));
+
+      setAdminOrders((prev) =>
+        prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o))
+      );
+
+      // important: selected view should also update + keep items
+      if (adminSelected?.id === updated.id) {
+        setAdminSelected((s) => (s ? { ...s, ...updated } : s));
+      }
     } catch (e) {
       alert(String(e?.message || e));
     } finally {
@@ -1171,25 +1282,27 @@ function MainApp() {
   const adminFiltered = useMemo(() => {
     const q = adminQ.trim().toLowerCase();
     return adminOrders.filter((o) => {
-      const matchStatus = adminStatusFilter === "all" ? true : String(o.status) === adminStatusFilter;
+      const matchStatus =
+        adminStatusFilter === "all"
+          ? true
+          : String(o.status) === adminStatusFilter;
       if (!q) return matchStatus;
 
-      const hay =
-        [
-          o.id,
-          o.customer_name,
-          o.customer_phone,
-          o.customer_address,
-          o.customer_notes,
-          o.payment,
-          o.currency,
-          o.location_address,
-          o.location_maps_url,
-          o.user_id,
-        ]
-          .map((x) => (x == null ? "" : String(x)))
-          .join(" ")
-          .toLowerCase();
+      const hay = [
+        o.id,
+        o.customer_name,
+        o.customer_phone,
+        o.customer_address,
+        o.customer_notes,
+        o.payment,
+        o.currency,
+        o.location_address,
+        o.location_maps_url,
+        o.user_id,
+      ]
+        .map((x) => (x == null ? "" : String(x)))
+        .join(" ")
+        .toLowerCase();
 
       return matchStatus && hay.includes(q);
     });
@@ -1228,11 +1341,19 @@ function MainApp() {
             Admin
           </button>
 
-          <button className="apexPillBtn" type="button" onClick={() => window.open(apiUrl("/health"), "_blank")}>
+          <button
+            className="apexPillBtn"
+            type="button"
+            onClick={() => window.open(apiUrl("/health"), "_blank")}
+          >
             Backend
           </button>
 
-          <button className="apexPillBtn apexPillBtnGold" type="button" onClick={() => setAuthOpen(true)}>
+          <button
+            className="apexPillBtn apexPillBtnGold"
+            type="button"
+            onClick={() => setAuthOpen(true)}
+          >
             {user ? "Account" : "Login"}
           </button>
         </div>
@@ -1247,7 +1368,8 @@ function MainApp() {
         <div className="apexHeroCard">
           <div className="apexHeroText">
             <div className="apexHeroTitle">
-              <span className="apexGold">{headline.titleA}</span> <span>{headline.titleB}</span>
+              <span className="apexGold">{headline.titleA}</span>{" "}
+              <span>{headline.titleB}</span>
             </div>
 
             <div className="apexHeroSubtitle">{headline.subtitle}</div>
@@ -1270,10 +1392,17 @@ function MainApp() {
           <div className="apexCardHead">
             <div>
               <div className="apexCardTitle">Blend Builder</div>
-              <div className="apexCardSub">Generate the best blend for your identity</div>
+              <div className="apexCardSub">
+                Generate the best blend for your identity
+              </div>
             </div>
 
-            <button className="apexBtnGold" type="button" onClick={fetchBlend} disabled={loadingBlend}>
+            <button
+              className="apexBtnGold"
+              type="button"
+              onClick={fetchBlend}
+              disabled={loadingBlend}
+            >
               {loadingBlend ? "Generating..." : "Generate Blend"}
             </button>
           </div>
@@ -1291,10 +1420,20 @@ function MainApp() {
             <div className="apexField">
               <div className="apexLabel">Line</div>
               <div className="apexSeg">
-                <button type="button" className={`apexSegBtn ${line === "daily" ? "isActive" : ""}`} onClick={() => setLine("daily")}>
+                <button
+                  type="button"
+                  className={`apexSegBtn ${line === "daily" ? "isActive" : ""}`}
+                  onClick={() => setLine("daily")}
+                >
                   Daily (optimum)
                 </button>
-                <button type="button" className={`apexSegBtn ${line === "premium" ? "isActive" : ""}`} onClick={() => setLine("premium")}>
+                <button
+                  type="button"
+                  className={`apexSegBtn ${
+                    line === "premium" ? "isActive" : ""
+                  }`}
+                  onClick={() => setLine("premium")}
+                >
                   Premium (best taste)
                 </button>
               </div>
@@ -1302,7 +1441,11 @@ function MainApp() {
 
             <div className="apexField">
               <div className="apexLabel">Size</div>
-              <select className="apexSelect" value={sizeG} onChange={(e) => setSizeG(parseInt(e.target.value, 10))}>
+              <select
+                className="apexSelect"
+                value={sizeG}
+                onChange={(e) => setSizeG(parseInt(e.target.value, 10))}
+              >
                 <option value={250}>250g</option>
                 <option value={500}>500g</option>
                 <option value={1000}>1kg</option>
@@ -1311,54 +1454,102 @@ function MainApp() {
 
             <div className="apexField">
               <div className="apexLabel">Brew method</div>
-              <select className="apexSelect" value={prefs.method} onChange={(e) => setPrefs((p) => ({ ...p, method: e.target.value }))}>
+              <select
+                className="apexSelect"
+                value={prefs.method}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, method: e.target.value }))
+                }
+              >
                 {METHOD_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
 
             <div className="apexField">
               <div className="apexLabel">Strength</div>
-              <select className="apexSelect" value={prefs.strength} onChange={(e) => setPrefs((p) => ({ ...p, strength: e.target.value }))}>
+              <select
+                className="apexSelect"
+                value={prefs.strength}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, strength: e.target.value }))
+                }
+              >
                 {STRENGTH_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
 
             <div className="apexField">
               <div className="apexLabel">Flavor direction</div>
-              <select className="apexSelect" value={prefs.flavor_direction} onChange={(e) => setPrefs((p) => ({ ...p, flavor_direction: e.target.value }))}>
+              <select
+                className="apexSelect"
+                value={prefs.flavor_direction}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, flavor_direction: e.target.value }))
+                }
+              >
                 {FLAVOR_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
 
             <div className="apexField">
               <div className="apexLabel">Acidity</div>
-              <select className="apexSelect" value={prefs.acidity} onChange={(e) => setPrefs((p) => ({ ...p, acidity: e.target.value }))}>
+              <select
+                className="apexSelect"
+                value={prefs.acidity}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, acidity: e.target.value }))
+                }
+              >
                 {ACIDITY_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
 
             <div className="apexField">
               <div className="apexLabel">Time</div>
-              <select className="apexSelect" value={prefs.time} onChange={(e) => setPrefs((p) => ({ ...p, time: e.target.value }))}>
+              <select
+                className="apexSelect"
+                value={prefs.time}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, time: e.target.value }))
+                }
+              >
                 {TIME_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
 
             <div className="apexField">
               <div className="apexLabel">Milk</div>
-              <select className="apexSelect" value={prefs.milk} onChange={(e) => setPrefs((p) => ({ ...p, milk: e.target.value }))}>
+              <select
+                className="apexSelect"
+                value={prefs.milk}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, milk: e.target.value }))
+                }
+              >
                 {MILK_OPTIONS.map((o) => (
-                  <option key={o.v} value={o.v}>{o.label}</option>
+                  <option key={o.v} value={o.v}>
+                    {o.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -1372,13 +1563,17 @@ function MainApp() {
             <div className="apexResult">
               <div className="apexResultTop">
                 <div>
-                  <div className="apexBlendName">{safeText(blend.blend_name_suggestion)}</div>
+                  <div className="apexBlendName">
+                    {safeText(blend.blend_name_suggestion)}
+                  </div>
                   <div className="apexBlendWhy">{safeText(blend.why)}</div>
                 </div>
 
                 <div className="apexPriceBox">
                   <div className="apexPriceLabel">Price</div>
-                  <div className="apexPrice">{Number(blend.price || 0)} EGP</div>
+                  <div className="apexPrice">
+                    {Number(blend.price || 0)} EGP
+                  </div>
                 </div>
               </div>
 
@@ -1388,8 +1583,12 @@ function MainApp() {
                 {blend.recipe.map((r, idx) => (
                   <div className="apexRecipeRow" key={`${r.origin_code}-${idx}`}>
                     <div className="apexRecipeOrigin">
-                      <div className="apexRecipeName">{safeText(r.origin_name)}</div>
-                      <div className="apexRecipeCode">{safeText(r.origin_code)}</div>
+                      <div className="apexRecipeName">
+                        {safeText(r.origin_name)}
+                      </div>
+                      <div className="apexRecipeCode">
+                        {safeText(r.origin_code)}
+                      </div>
                     </div>
                     <div className="apexRecipeGrams">{Number(r.grams)}g</div>
                   </div>
@@ -1397,16 +1596,30 @@ function MainApp() {
               </div>
 
               <div className="apexResultActions">
-                <button className="apexBtnGold" type="button" onClick={saveCurrentBlend} disabled={!blend || saving}>
+                <button
+                  className="apexBtnGold"
+                  type="button"
+                  onClick={saveCurrentBlend}
+                  disabled={!blend || saving}
+                >
                   {saving ? "Saving..." : "Save Blend"}
                 </button>
 
-                <button className="apexPillBtn apexPillBtnGold" type="button" onClick={addBlendToCartFromGenerated} disabled={!blend || loadingBlend}>
+                <button
+                  className="apexPillBtn apexPillBtnGold"
+                  type="button"
+                  onClick={addBlendToCartFromGenerated}
+                  disabled={!blend || loadingBlend}
+                >
                   Add Blend to Cart
                 </button>
 
                 <div className="apexSaveMeta">
-                  {saveMsg ? saveMsg : user ? `Logged in: ${user.email || user.id}` : "Login to save your blends."}
+                  {saveMsg
+                    ? saveMsg
+                    : user
+                    ? `Logged in: ${user.email || user.id}`
+                    : "Login to save your blends."}
                 </div>
               </div>
             </div>
@@ -1418,7 +1631,8 @@ function MainApp() {
           <div className="apexCardHead">
             <div>
               <div className="apexCardTitle">
-                Cart & Checkout <span className="apexCountBadge">{cart.length}</span>
+                Cart & Checkout{" "}
+                <span className="apexCountBadge">{cart.length}</span>
               </div>
               <div className="apexCardSub">Cash on delivery MVP</div>
             </div>
@@ -1430,7 +1644,12 @@ function MainApp() {
           <div className="apexCartBlock">
             <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
               <div className="apexCartTitle">Cart</div>
-              <button className="apexPillBtn" type="button" onClick={clearCart} disabled={cart.length === 0}>
+              <button
+                className="apexPillBtn"
+                type="button"
+                onClick={clearCart}
+                disabled={cart.length === 0}
+              >
                 Clear
               </button>
             </div>
@@ -1452,7 +1671,12 @@ function MainApp() {
 
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       <div className="apexRecipeGrams">{Number(it.price)} EGP</div>
-                      <button className="apexModalClose" type="button" onClick={() => removeCartItem(it.id)} title="Remove">
+                      <button
+                        className="apexModalClose"
+                        type="button"
+                        onClick={() => removeCartItem(it.id)}
+                        title="Remove"
+                      >
                         ✕
                       </button>
                     </div>
@@ -1471,14 +1695,35 @@ function MainApp() {
             </div>
 
             <div className="apexCheckoutGrid">
-              <input className="apexInput" placeholder="Customer name" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
-              <input className="apexInput" placeholder="01xxxxxxxxx" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} />
-              <input className="apexInput" placeholder="City, street, building..." value={customerAddress} onChange={(e) => setCustomerAddress(e.target.value)} />
-              <textarea className="apexTextarea" placeholder="Optional notes" value={customerNotes} onChange={(e) => setCustomerNotes(e.target.value)} />
+              <input
+                className="apexInput"
+                placeholder="Customer name"
+                value={customerName}
+                onChange={(e) => setCustomerName(e.target.value)}
+              />
+              <input
+                className="apexInput"
+                placeholder="01xxxxxxxxx"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+              />
+              <input
+                className="apexInput"
+                placeholder="City, street, building..."
+                value={customerAddress}
+                onChange={(e) => setCustomerAddress(e.target.value)}
+              />
+              <textarea
+                className="apexTextarea"
+                placeholder="Optional notes"
+                value={customerNotes}
+                onChange={(e) => setCustomerNotes(e.target.value)}
+              />
             </div>
 
             <div className="apexCartTitle" style={{ marginTop: 14 }}>
-              Delivery location (Google Maps) <span style={{ opacity: 0.8 }}>(required)</span>
+              Delivery location (Google Maps){" "}
+              <span style={{ opacity: 0.8 }}>(required)</span>
             </div>
 
             <GoogleMapsPicker value={location} onChange={setLocation} />
@@ -1520,7 +1765,9 @@ function MainApp() {
                   <div className="apexSavedMeta">
                     {safeText(b.line).toUpperCase()} • {Number(b.size_g)}g • {Number(b.price)} EGP
                   </div>
-                  <div className="apexSavedWhen">{b.created_at ? new Date(b.created_at).toLocaleString() : ""}</div>
+                  <div className="apexSavedWhen">
+                    {b.created_at ? new Date(b.created_at).toLocaleString() : ""}
+                  </div>
 
                   <button
                     className="apexPillBtn apexPillBtnGold"
@@ -1555,7 +1802,9 @@ function MainApp() {
             <div className="apexSavedGrid">
               {orders.map((o) => (
                 <div className="apexSavedCard" key={o.id}>
-                  <div className="apexSavedName">Order #{String(o.id).slice(0, 8).toUpperCase()}</div>
+                  <div className="apexSavedName">
+                    Order #{String(o.id).slice(0, 8).toUpperCase()}
+                  </div>
 
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
                     <span
@@ -1580,6 +1829,11 @@ function MainApp() {
 
                   <div className="apexSavedWhen" style={{ marginTop: 8 }}>
                     {o.created_at ? new Date(o.created_at).toLocaleString() : ""}
+                    {o.updated_at ? (
+                      <div style={{ opacity: 0.75, fontSize: 12 }}>
+                        Updated: {new Date(o.updated_at).toLocaleString()}
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="apexTinyNote" style={{ marginTop: 8 }}>
@@ -1648,10 +1902,14 @@ function MainApp() {
         </section>
       ) : null}
 
-      {/* ===== Admin Modal ===== */}
+      {/* ===== Admin Modal (Admin Panel) ===== */}
       {adminOpen ? (
         <div className="apexModalOverlay" onMouseDown={() => setAdminOpen(false)}>
-          <div className="apexModalCard" onMouseDown={(e) => e.stopPropagation()} style={{ width: "min(980px, 100%)" }}>
+          <div
+            className="apexModalCard"
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{ width: "min(980px, 100%)" }}
+          >
             <div className="apexModalTop">
               <div className="apexModalTitle">Admin Orders</div>
               <button className="apexModalClose" type="button" onClick={() => setAdminOpen(false)}>
@@ -1672,15 +1930,26 @@ function MainApp() {
                   disabled={!isAdmin}
                 />
 
-                <select className="apexSelect" value={adminStatusFilter} onChange={(e) => setAdminStatusFilter(e.target.value)} disabled={!isAdmin}>
+                <select
+                  className="apexSelect"
+                  value={adminStatusFilter}
+                  onChange={(e) => setAdminStatusFilter(e.target.value)}
+                  disabled={!isAdmin}
+                >
                   <option value="all">All statuses</option>
                   <option value="new">New</option>
                   <option value="in_progress">In progress</option>
                   <option value="delivering">Delivering</option>
                   <option value="delivered">Delivered</option>
+                  <option value="cancelled">Cancelled</option>
                 </select>
 
-                <button className="apexPillBtn" type="button" onClick={adminLoadOrders} disabled={!isAdmin}>
+                <button
+                  className="apexPillBtn"
+                  type="button"
+                  onClick={adminLoadOrders}
+                  disabled={!isAdmin}
+                >
                   {adminLoading ? "Loading..." : "Refresh"}
                 </button>
               </div>
@@ -1701,6 +1970,11 @@ function MainApp() {
                         {safeText(o.customer_address)}
                         <br />
                         {o.created_at ? new Date(o.created_at).toLocaleString() : ""}
+                        {o.updated_at ? (
+                          <div style={{ opacity: 0.75 }}>
+                            Updated: {new Date(o.updated_at).toLocaleString()}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 
@@ -1719,9 +1993,15 @@ function MainApp() {
                         <option value="in_progress">in_progress</option>
                         <option value="delivering">delivering</option>
                         <option value="delivered">delivered</option>
+                        <option value="cancelled">cancelled</option>
                       </select>
 
-                      <button className="apexPillBtn apexPillBtnGold" type="button" onClick={() => setAdminSelected(o)} disabled={!isAdmin}>
+                      <button
+                        className="apexPillBtn apexPillBtnGold"
+                        type="button"
+                        onClick={() => setAdminSelected(o)}
+                        disabled={!isAdmin}
+                      >
                         View
                       </button>
                     </div>
@@ -1729,13 +2009,23 @@ function MainApp() {
                 ))}
 
                 {adminLoading ? <div className="apexTinyNote">Loading…</div> : null}
-                {!adminLoading && adminFiltered.length === 0 ? <div className="apexSavedEmpty">No matching orders.</div> : null}
+                {!adminLoading && adminFiltered.length === 0 ? (
+                  <div className="apexSavedEmpty">No matching orders.</div>
+                ) : null}
               </div>
             </div>
 
             {adminSelected ? (
-              <div className="apexModalOverlay" onMouseDown={() => setAdminSelected(null)} style={{ background: "rgba(0,0,0,.55)" }}>
-                <div className="apexModalCard" onMouseDown={(e) => e.stopPropagation()} style={{ width: "min(920px, 100%)" }}>
+              <div
+                className="apexModalOverlay"
+                onMouseDown={() => setAdminSelected(null)}
+                style={{ background: "rgba(0,0,0,.55)" }}
+              >
+                <div
+                  className="apexModalCard"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  style={{ width: "min(920px, 100%)" }}
+                >
                   <div className="apexModalTop">
                     <div className="apexModalTitle">
                       Order #{String(adminSelected.id).slice(0, 8).toUpperCase()}
@@ -1761,6 +2051,7 @@ function MainApp() {
                       <option value="in_progress">in_progress</option>
                       <option value="delivering">delivering</option>
                       <option value="delivered">delivered</option>
+                      <option value="cancelled">cancelled</option>
                     </select>
 
                     <div className="apexTinyNote">
@@ -1781,6 +2072,11 @@ function MainApp() {
                     ) : null}
                     <b>Payment:</b> {safeText(adminSelected.payment)} <br />
                     <b>Created:</b> {adminSelected.created_at ? new Date(adminSelected.created_at).toLocaleString() : ""} <br />
+                    {adminSelected.updated_at ? (
+                      <>
+                        <b>Updated:</b> {new Date(adminSelected.updated_at).toLocaleString()} <br />
+                      </>
+                    ) : null}
                   </div>
 
                   {adminSelected.location_lat && adminSelected.location_lng ? (
@@ -1831,7 +2127,14 @@ function MainApp() {
                   {adminSelected.location_snapshot || adminSelected.preferences ? (
                     <div className="apexResult" style={{ marginTop: 14 }}>
                       <div style={{ fontWeight: 900, marginBottom: 6 }}>Raw Snapshots</div>
-                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, color: "rgba(255,255,255,.78)" }}>
+                      <pre
+                        style={{
+                          margin: 0,
+                          whiteSpace: "pre-wrap",
+                          fontSize: 12,
+                          color: "rgba(255,255,255,.78)",
+                        }}
+                      >
 {JSON.stringify(
   {
     preferences: adminSelected.preferences ?? null,
