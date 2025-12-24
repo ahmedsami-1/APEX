@@ -46,7 +46,7 @@ if (!process.env.OPENAI_API_KEY) console.warn("⚠️ Missing OPENAI_API_KEY");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // Model via ENV (easy switch)
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.2"; // set OPENAI_MODEL=gpt-5.2
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.2";
 const OPENAI_TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE ?? "0.2");
 
 // ================== Supabase Admin (server-only) ==================
@@ -59,6 +59,43 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { persistSession: false } }
 );
+
+// ================== Admin whitelist ==================
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+function isAdminEmail(email) {
+  if (!ADMIN_EMAILS.length) return false;
+  return ADMIN_EMAILS.includes(email);
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const auth = req.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (!token) return res.status(401).json({ error: "Missing bearer token" });
+
+    const jwtSecret = process.env.SUPABASE_JWT_SECRET;
+    if (!jwtSecret)
+      return res
+        .status(500)
+        .json({ error: "Server missing SUPABASE_JWT_SECRET" });
+
+    const payload = jwt.verify(token, jwtSecret);
+
+    const email = payload?.email || payload?.user_metadata?.email || "";
+    if (!email) return res.status(401).json({ error: "Invalid token (no email)" });
+
+    if (!isAdminEmail(email)) return res.status(403).json({ error: "Not admin" });
+
+    req.adminUser = { id: payload.sub, email };
+    next();
+  } catch (e) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+}
 
 /**
  * Load coffee origins from DB (stock aware).
@@ -116,43 +153,6 @@ async function loadOriginsFromDB({ onlyAvailable = true } = {}) {
   }));
 }
 
-// ================== Admin whitelist ==================
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-function isAdminEmail(email) {
-  if (!ADMIN_EMAILS.length) return false;
-  return ADMIN_EMAILS.includes(email);
-}
-
-async function requireAdmin(req, res, next) {
-  try {
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    if (!token) return res.status(401).json({ error: "Missing bearer token" });
-
-    const jwtSecret = process.env.SUPABASE_JWT_SECRET;
-    if (!jwtSecret)
-      return res
-        .status(500)
-        .json({ error: "Server missing SUPABASE_JWT_SECRET" });
-
-    const payload = jwt.verify(token, jwtSecret);
-
-    const email = payload?.email || payload?.user_metadata?.email || "";
-    if (!email) return res.status(401).json({ error: "Invalid token (no email)" });
-
-    if (!isAdminEmail(email)) return res.status(403).json({ error: "Not admin" });
-
-    req.adminUser = { id: payload.sub, email };
-    next();
-  } catch (e) {
-    return res.status(401).json({ error: "Invalid token" });
-  }
-}
-
 // ================== Pricing ==================
 const PACKAGING_COST = 15;
 const MARGIN_PCT = 0.15;
@@ -199,6 +199,18 @@ function clamp10(v, def = 5) {
   return Math.max(1, Math.min(10, n));
 }
 
+function clampNonNegInt(v, def = 0) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(0, Math.floor(n));
+}
+
+function clampMoney(v, def = 0) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(0, Math.round(n * 100) / 100);
+}
+
 const CHART_AXES = [
   { key: "body", label: "Body" },
   { key: "acidity", label: "Acidity" },
@@ -230,16 +242,12 @@ function computeBlendProfile(recipe, originMap) {
     }
   }
 
-  // 1 decimal
   for (const a of CHART_AXES) out[a.key] = Math.round(out[a.key] * 10) / 10;
-
   return out;
 }
 
 /**
  * Convert user preferences -> target sensory profile (1..10).
- * We keep it conservative: it's a "target dial", not a fake tasting claim.
- * This helps AI explain "based on what exactly".
  */
 function deriveTargetProfile(preferences) {
   const p = preferences || {};
@@ -249,7 +257,6 @@ function deriveTargetProfile(preferences) {
   const milk = safeStr(p.milk || p.with_milk || "").toLowerCase();
   const acidityPref = p.acidity_level ?? p.acidity ?? null;
 
-  // neutral baseline
   const t = {
     body: 5,
     acidity: 5,
@@ -261,13 +268,16 @@ function deriveTargetProfile(preferences) {
     nutty: 5,
   };
 
-  // method nudges
   if (method.includes("espresso")) {
     t.body += 2;
     t.bitterness += 1;
     t.acidity -= 1;
     t.chocolate += 1;
-  } else if (method.includes("v60") || method.includes("pour") || method.includes("filter")) {
+  } else if (
+    method.includes("v60") ||
+    method.includes("pour") ||
+    method.includes("filter")
+  ) {
     t.acidity += 2;
     t.aroma += 1;
     t.fruitiness += 2;
@@ -278,7 +288,6 @@ function deriveTargetProfile(preferences) {
     t.nutty += 1;
   }
 
-  // strength
   if (strength.includes("strong") || strength.includes("high")) {
     t.body += 1;
     t.bitterness += 1;
@@ -288,7 +297,6 @@ function deriveTargetProfile(preferences) {
     t.acidity += 1;
   }
 
-  // milk
   if (milk.includes("yes") || milk.includes("with") || milk.includes("milk")) {
     t.body += 1;
     t.chocolate += 1;
@@ -296,7 +304,6 @@ function deriveTargetProfile(preferences) {
     t.acidity -= 1;
   }
 
-  // flavor direction
   if (flavor.includes("fruity") || flavor.includes("floral")) {
     t.fruitiness += 3;
     t.aroma += 1;
@@ -311,19 +318,13 @@ function deriveTargetProfile(preferences) {
     t.nutty += 3;
     t.chocolate += 1;
     t.fruitiness -= 1;
-  } else if (flavor.includes("balanced")) {
-    // keep near center
-    t.body += 0;
   }
 
-  // explicit acidity preference overrides (if numeric)
   if (acidityPref != null && Number.isFinite(Number(acidityPref))) {
     t.acidity = clamp10(acidityPref, t.acidity);
   }
 
-  // clamp
   for (const k of Object.keys(t)) t[k] = clamp10(t[k], 5);
-
   return t;
 }
 
@@ -406,9 +407,6 @@ function validateStrict(recipe, sizeG, originMap) {
   if (sum !== sizeG) throw new Error(`grams sum must be exactly ${sizeG}`);
 }
 
-/**
- * Autofix: strict correctness > taste nuance (last resort)
- */
 function autofixBestAttempt(recipe, sizeG, originMap) {
   let fixed = (Array.isArray(recipe) ? recipe : [])
     .filter((r) => r && originMap.has(r.origin_code))
@@ -436,7 +434,6 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
       fixed.push({ origin_code: second.code, grams: 20 });
   }
 
-  // clamp by stock
   fixed = fixed.map((r) => {
     const max = originMap.get(r.origin_code).maxGrams;
     return { ...r, grams: Math.min(r.grams, max) };
@@ -465,7 +462,7 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
 // ================== Health ==================
 app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// ================== Recommend (OpenAI, Stock-aware, High-Explainability + Chart) ==================
+// ================== Recommend ==================
 app.post("/api/recommend", async (req, res) => {
   try {
     const { size_g, line, preferences } = req.body || {};
@@ -478,7 +475,6 @@ app.post("/api/recommend", async (req, res) => {
     if (!process.env.OPENAI_API_KEY)
       throw new Error("Server missing OPENAI_API_KEY");
 
-    // ✅ Load stock from DB
     const ORIGINS_DB = await loadOriginsFromDB({ onlyAvailable: true });
     if (!ORIGINS_DB.length) {
       return res.status(400).json({ error: "No stock available right now." });
@@ -486,14 +482,12 @@ app.post("/api/recommend", async (req, res) => {
 
     const originMap = new Map(ORIGINS_DB.map((o) => [o.code, o]));
 
-    // Tight list for the model (truth-bound)
     const availableOriginsForModel = ORIGINS_DB.map((o) => ({
       code: o.code,
       name: o.name,
       maxGrams: o.maxGrams,
       costPerG: o.costPerG,
       notes: o.notes,
-      // sensory
       acidity: o.acidity,
       body: o.body,
       sweetness: o.sweetness,
@@ -506,7 +500,6 @@ app.post("/api/recommend", async (req, res) => {
 
     const targetProfile = deriveTargetProfile(preferences);
 
-    // ====== Output spec: professional + "proof of choice" + persona letter ======
     const systemBase = `
 You are APEX Blend Architect: a coffee formulator + a rational explainer.
 You MUST be truthful and strictly bound to provided available_origins (notes + sensory numbers).
@@ -533,7 +526,6 @@ Optimization:
 - premium: maximize cup quality (cost secondary).
 `;
 
-    // JSON schema (Structured Outputs) for much higher reliability
     const outputSchema = {
       type: "object",
       additionalProperties: false,
@@ -729,12 +721,9 @@ Optimization:
           recipe: outRecipe,
           optimality_proof: raw.optimality_proof || null,
           taste_persona_letter: raw.taste_persona_letter || null,
-
-          // ✅ chart payload for frontend (radar/spider chart)
           target_profile: targetProfile,
           blend_profile: blendProfile,
           chart,
-
           price: pricing.total,
           pricing,
           meta: {
@@ -750,14 +739,12 @@ Optimization:
       }
     }
 
-    // ====== Final safety net (autofix) ======
     if (!best) throw new Error("No usable output after attempts");
 
     const fixedRecipe = autofixBestAttempt(best.raw?.recipe, size_g, originMap);
     validateStrict(fixedRecipe, size_g, originMap);
 
     const pricing = priceBlend(fixedRecipe, originMap);
-
     const blendProfile = computeBlendProfile(fixedRecipe, originMap);
     const chart = buildChartPayload(blendProfile, targetProfile);
 
@@ -771,11 +758,11 @@ Optimization:
           role_in_structure: "Balance (Fallback)",
           why_this_origin: [
             "Chosen from currently available stock; fallback mode focuses on correctness over nuanced optimization.",
-            "Profile alignment uses only provided notes and sensory numbers."
+            "Profile alignment uses only provided notes and sensory numbers.",
           ],
           why_this_grams: [
             `Normalized to exactly ${size_g}g while keeping each component meaningful (>= 20g) and within stock.`,
-            "Adjusting any component by ±20g will shift balance, but constraints must remain satisfied."
+            "Adjusting any component by ±20g will shift balance, but constraints must remain satisfied.",
           ],
           difference_vs_alternatives: [],
           honesty_clause:
@@ -802,7 +789,8 @@ Optimization:
         counterfactuals: [
           {
             change: "If we push one dial (e.g., more fruitiness)",
-            what_would_change_in_recipe: "We would shift grams toward higher-fruitiness origins if stock allows.",
+            what_would_change_in_recipe:
+              "We would shift grams toward higher-fruitiness origins if stock allows.",
             why_current_is_optimum_for_given_prefs:
               "Current output prioritizes strict correctness under failure conditions.",
           },
@@ -814,7 +802,10 @@ Optimization:
         opening:
           "Based on your selected preferences, this blend was built to respect your choices and the available stock with strict correctness.",
         traits: [
-          { label: "Taste compass", evidence: "Derived only from your flavor_direction/acidity/milk selections." },
+          {
+            label: "Taste compass",
+            evidence: "Derived only from your flavor_direction/acidity/milk selections.",
+          },
           { label: "Ritual style", evidence: "Derived only from your brew method + timing selections." },
           { label: "Power dial", evidence: "Derived only from your strength selection." },
         ],
@@ -828,11 +819,9 @@ Optimization:
         ],
         closing: "If you tweak your preferences, we can re-optimize with a different structure.",
       },
-
       target_profile: targetProfile,
       blend_profile: blendProfile,
       chart,
-
       price: pricing.total,
       pricing,
       meta: {
@@ -849,11 +838,147 @@ Optimization:
   }
 });
 
-// ================== Admin APIs ==================
+// ================== Admin Stock APIs ==================
+const ORIGIN_SEL = `
+  code, name, stock_g, cost_per_g, notes, is_active,
+  acidity, body, sweetness, bitterness, aroma, fruitiness, chocolate, nutty
+`;
+
 /**
- * GET /api/admin/orders?limit=200
- * بيرجع orders + items + location + snapshots
+ * GET /api/admin/origins?include_inactive=1
+ * بيرجع كل origins (حتى لو inactive) علشان الداشبورد
  */
+app.get("/api/admin/origins", requireAdmin, async (req, res) => {
+  try {
+    const includeInactive = String(req.query.include_inactive || "0") === "1";
+
+    let q = supabaseAdmin.from("origins").select(ORIGIN_SEL).order("code", { ascending: true });
+    if (!includeInactive) q = q.eq("is_active", true);
+
+    const { data, error } = await q;
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ ok: true, origins: data || [] });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+/**
+ * POST /api/admin/origins
+ * body: { code, name, stock_g, cost_per_g, notes[], acidity..nutty }
+ */
+app.post("/api/admin/origins", requireAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+
+    const code = safeStr(b.code).trim();
+    if (!code) return res.status(400).json({ error: "code required" });
+
+    const row = {
+      code,
+      name: safeStr(b.name).trim() || code,
+      stock_g: clampNonNegInt(b.stock_g, 0),
+      cost_per_g: clampMoney(b.cost_per_g, 0),
+      notes: Array.isArray(b.notes)
+        ? b.notes.map((x) => safeStr(x).trim()).filter(Boolean)
+        : [],
+      is_active: b.is_active == null ? true : !!b.is_active,
+      acidity: clamp10(b.acidity, 5),
+      body: clamp10(b.body, 5),
+      sweetness: clamp10(b.sweetness, 5),
+      bitterness: clamp10(b.bitterness, 5),
+      aroma: clamp10(b.aroma, 5),
+      fruitiness: clamp10(b.fruitiness, 5),
+      chocolate: clamp10(b.chocolate, 5),
+      nutty: clamp10(b.nutty, 5),
+    };
+
+    const { data, error } = await supabaseAdmin
+      .from("origins")
+      .insert([row])
+      .select(ORIGIN_SEL)
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ ok: true, origin: data });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+/**
+ * PATCH /api/admin/origins/:code
+ * body: أي subset من fields
+ */
+app.patch("/api/admin/origins/:code", requireAdmin, async (req, res) => {
+  try {
+    const code = safeStr(req.params.code).trim();
+    if (!code) return res.status(400).json({ error: "code required" });
+
+    const b = req.body || {};
+    const patch = {};
+
+    if (b.name != null) patch.name = safeStr(b.name).trim();
+    if (b.stock_g != null) patch.stock_g = clampNonNegInt(b.stock_g, 0);
+    if (b.cost_per_g != null) patch.cost_per_g = clampMoney(b.cost_per_g, 0);
+    if (b.is_active != null) patch.is_active = !!b.is_active;
+
+    if (b.notes != null) {
+      patch.notes = Array.isArray(b.notes)
+        ? b.notes.map((x) => safeStr(x).trim()).filter(Boolean)
+        : [];
+    }
+
+    for (const k of ["acidity","body","sweetness","bitterness","aroma","fruitiness","chocolate","nutty"]) {
+      if (b[k] != null) patch[k] = clamp10(b[k], 5);
+    }
+
+    if (!Object.keys(patch).length) {
+      return res.status(400).json({ error: "No fields to update" });
+    }
+
+    const { data, error } = await supabaseAdmin
+      .from("origins")
+      .update(patch)
+      .eq("code", code)
+      .select(ORIGIN_SEL)
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ ok: true, origin: data });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+/**
+ * DELETE /api/admin/origins/:code
+ * “soft delete”: يخلي is_active=false و stock_g=0
+ */
+app.delete("/api/admin/origins/:code", requireAdmin, async (req, res) => {
+  try {
+    const code = safeStr(req.params.code).trim();
+    if (!code) return res.status(400).json({ error: "code required" });
+
+    const { data, error } = await supabaseAdmin
+      .from("origins")
+      .update({ is_active: false, stock_g: 0 })
+      .eq("code", code)
+      .select(ORIGIN_SEL)
+      .single();
+
+    if (error) return res.status(400).json({ error: error.message });
+
+    res.json({ ok: true, origin: data });
+  } catch (e) {
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+});
+
+// ================== Admin Orders APIs ==================
 app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit || "200", 10), 500);
@@ -906,10 +1031,6 @@ app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   }
 });
 
-/**
- * PATCH /api/admin/orders/:id/status
- * body: { status: "new" | "in_progress" | "delivering" | "delivered" | "cancelled" }
- */
 app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
@@ -957,4 +1078,6 @@ app.get(/^(?!\/api).*/, (req, res) => {
 
 // ================== Start ==================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log("Backend running: http://localhost:" + PORT));
+app.listen(PORT, () =>
+  console.log("Backend running: http://localhost:" + PORT)
+);

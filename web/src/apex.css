@@ -961,3 +961,65 @@ body{
 .apexMiniStatD.isUp{ color: rgba(255,215,120,0.92); }
 .apexMiniStatD.isDown{ color: rgba(140,200,255,0.85); }
 .apexMiniStatD.isZero{ color: rgba(255,255,255,0.62); }
+
+/* ===== Admin Stock Manager ===== */
+.apexAdminSectionTitle{
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.apexAdminHint{
+  color: rgba(255,255,255,.62);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.apexAdminForm{
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.apexAdminRow2{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.apexAdminRow3{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 12px;
+}
+
+.apexAdminRow4{
+  display:grid;
+  grid-template-columns: repeat(4, minmax(0,1fr));
+  gap: 10px;
+}
+
+@media (max-width: 900px){
+  .apexAdminRow4{ grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 560px){
+  .apexAdminRow2, .apexAdminRow3, .apexAdminRow4{ grid-template-columns: 1fr; }
+}
+
+.apexAdminField{
+  min-width: 0;
+}
+
+.apexAdminLabel{
+  font-size: 12px;
+  color: rgba(255,255,255,.70);
+  font-weight: 900;
+  margin: 0 0 6px 2px;
+  letter-spacing: .2px;
+}
+
+.apexAdminHelp{
+  margin-top: 6px;
+  font-size: 11px;
+  color: rgba(255,255,255,.55);
+  font-weight: 700;
+}

@@ -802,13 +802,16 @@ function GoogleMapsPicker({ value, onChange }) {
         </div>
       </div>
 
-      <input
-        ref={inputRef}
-        className="apexInput"
-        placeholder="Search on Google Maps (luxury)"
-        defaultValue=""
-        disabled={!ready || busy}
-      />
+      <div className="apexField">
+        <div className="apexLabel">Search on Google Maps</div>
+        <input
+          ref={inputRef}
+          className="apexInput"
+          placeholder="Type your address / area..."
+          defaultValue=""
+          disabled={!ready || busy}
+        />
+      </div>
 
       <div
         ref={mapDivRef}
@@ -821,12 +824,15 @@ function GoogleMapsPicker({ value, onChange }) {
         }}
       />
 
-      <input
-        className="apexInput"
-        placeholder="Detected address (auto from Google) — you can edit"
-        value={value?.address || ""}
-        onChange={(e) => onChange?.({ ...(value || {}), address: e.target.value })}
-      />
+      <div className="apexField">
+        <div className="apexLabel">Detected address (editable)</div>
+        <input
+          className="apexInput"
+          placeholder="Detected address (auto from Google) — you can edit"
+          value={value?.address || ""}
+          onChange={(e) => onChange?.({ ...(value || {}), address: e.target.value })}
+        />
+      </div>
 
       {value?.lat && value?.lng ? (
         <div className="apexTinyNote" style={{ opacity: 0.75 }}>
@@ -1863,6 +1869,25 @@ function MainApp() {
     cart.length > 0 && hasRequiredDetails && hasLocation && !placingOrder;
   const quickNavHidden = authOpen || adminOpen;
 
+  const sensoryKeys = useMemo(
+    () => ["acidity", "body", "sweetness", "bitterness", "aroma", "fruitiness", "chocolate", "nutty"],
+    []
+  );
+
+  const sensoryLabels = useMemo(
+    () => ({
+      acidity: "Acidity (1-10)",
+      body: "Body (1-10)",
+      sweetness: "Sweetness (1-10)",
+      bitterness: "Bitterness (1-10)",
+      aroma: "Aroma (1-10)",
+      fruitiness: "Fruitiness (1-10)",
+      chocolate: "Chocolate (1-10)",
+      nutty: "Nutty (1-10)",
+    }),
+    []
+  );
+
   return (
     <div className={`apexApp ${themeClass}`}>
       {/* ===== Top bar ===== */}
@@ -2633,77 +2658,97 @@ function MainApp() {
               <div style={{ fontWeight: 900, opacity: 0.9 }}>Add new origin</div>
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <input
-                  className="apexInput"
-                  placeholder="code e.g. ET_SIDAMO"
-                  value={newOrigin.code}
-                  onChange={(e) => setNewOrigin((p) => ({ ...p, code: e.target.value }))}
-                  disabled={!isAdmin}
-                />
-                <input
-                  className="apexInput"
-                  placeholder="name"
-                  value={newOrigin.name}
-                  onChange={(e) => setNewOrigin((p) => ({ ...p, name: e.target.value }))}
-                  disabled={!isAdmin}
-                />
-                <input
-                  className="apexInput"
-                  type="number"
-                  placeholder="stock_g"
-                  value={Number(newOrigin.stock_g || 0)}
-                  onChange={(e) =>
-                    setNewOrigin((p) => ({
-                      ...p,
-                      stock_g: parseInt(e.target.value || "0", 10),
-                    }))
-                  }
-                  disabled={!isAdmin}
-                />
-                <input
-                  className="apexInput"
-                  type="number"
-                  step="0.01"
-                  placeholder="cost_per_g"
-                  value={Number(newOrigin.cost_per_g || 0)}
-                  onChange={(e) =>
-                    setNewOrigin((p) => ({
-                      ...p,
-                      cost_per_g: Number(e.target.value || "0"),
-                    }))
-                  }
-                  disabled={!isAdmin}
-                />
-              </div>
-
-              <input
-                className="apexInput"
-                placeholder='notes csv: "chocolate,nuts"'
-                value={newOrigin.notesCsv}
-                onChange={(e) => setNewOrigin((p) => ({ ...p, notesCsv: e.target.value }))}
-                disabled={!isAdmin}
-              />
-
-              <div className="apexTinyNote" style={{ opacity: 0.85 }}>
-                Sensory (1..10): acidity/body/sweetness/bitterness/aroma/fruitiness/chocolate/nutty
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-                {["acidity","body","sweetness","bitterness","aroma","fruitiness","chocolate","nutty"].map((k) => (
+                <div className="apexField">
+                  <div className="apexLabel">Origin code</div>
                   <input
-                    key={k}
+                    className="apexInput"
+                    placeholder="e.g. ET_SIDAMO"
+                    value={newOrigin.code}
+                    onChange={(e) => setNewOrigin((p) => ({ ...p, code: e.target.value }))}
+                    disabled={!isAdmin}
+                  />
+                </div>
+
+                <div className="apexField">
+                  <div className="apexLabel">Display name</div>
+                  <input
+                    className="apexInput"
+                    placeholder="e.g. Ethiopia Sidamo"
+                    value={newOrigin.name}
+                    onChange={(e) => setNewOrigin((p) => ({ ...p, name: e.target.value }))}
+                    disabled={!isAdmin}
+                  />
+                </div>
+
+                <div className="apexField">
+                  <div className="apexLabel">Stock (grams)</div>
+                  <input
                     className="apexInput"
                     type="number"
-                    min="1"
-                    max="10"
-                    step="1"
-                    placeholder={k}
-                    value={Number(newOrigin[k] ?? 5)}
+                    placeholder="stock_g"
+                    value={Number(newOrigin.stock_g || 0)}
                     onChange={(e) =>
-                      setNewOrigin((p) => ({ ...p, [k]: parseInt(e.target.value || "5", 10) }))
+                      setNewOrigin((p) => ({
+                        ...p,
+                        stock_g: parseInt(e.target.value || "0", 10),
+                      }))
                     }
                     disabled={!isAdmin}
                   />
+                </div>
+
+                <div className="apexField">
+                  <div className="apexLabel">Cost per gram</div>
+                  <input
+                    className="apexInput"
+                    type="number"
+                    step="0.01"
+                    placeholder="cost_per_g"
+                    value={Number(newOrigin.cost_per_g || 0)}
+                    onChange={(e) =>
+                      setNewOrigin((p) => ({
+                        ...p,
+                        cost_per_g: Number(e.target.value || "0"),
+                      }))
+                    }
+                    disabled={!isAdmin}
+                  />
+                </div>
+              </div>
+
+              <div className="apexField">
+                <div className="apexLabel">Notes (CSV)</div>
+                <input
+                  className="apexInput"
+                  placeholder='Example: chocolate,nuts,floral'
+                  value={newOrigin.notesCsv}
+                  onChange={(e) => setNewOrigin((p) => ({ ...p, notesCsv: e.target.value }))}
+                  disabled={!isAdmin}
+                />
+              </div>
+
+              <div className="apexTinyNote" style={{ opacity: 0.85 }}>
+                Sensory scores are 1..10 (used by AI for matching, not “fake tasting claims”).
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                {sensoryKeys.map((k) => (
+                  <div key={k} className="apexField">
+                    <div className="apexLabel">{sensoryLabels[k]}</div>
+                    <input
+                      className="apexInput"
+                      type="number"
+                      min="1"
+                      max="10"
+                      step="1"
+                      placeholder={k}
+                      value={Number(newOrigin[k] ?? 5)}
+                      onChange={(e) =>
+                        setNewOrigin((p) => ({ ...p, [k]: parseInt(e.target.value || "5", 10) }))
+                      }
+                      disabled={!isAdmin}
+                    />
+                  </div>
                 ))}
               </div>
 
@@ -2742,60 +2787,64 @@ function MainApp() {
                   <div
                     style={{
                       display: "flex",
-                      gap: 8,
-                      alignItems: "center",
+                      gap: 10,
+                      alignItems: "flex-end",
                       flexWrap: "wrap",
                       justifyContent: "flex-end",
                     }}
                   >
-                    <input
-                      className="apexInput"
-                      style={{ width: 120 }}
-                      type="number"
-                      value={Number(o.stock_g || 0)}
-                      onChange={(e) =>
-                        setAdminOrigins((prev) =>
-                          prev.map((x) =>
-                            x.code === o.code
-                              ? { ...x, stock_g: parseInt(e.target.value || "0", 10) }
-                              : x
+                    <div className="apexField" style={{ margin: 0, width: 140 }}>
+                      <div className="apexLabel">Stock (g)</div>
+                      <input
+                        className="apexInput"
+                        type="number"
+                        value={Number(o.stock_g || 0)}
+                        onChange={(e) =>
+                          setAdminOrigins((prev) =>
+                            prev.map((x) =>
+                              x.code === o.code
+                                ? { ...x, stock_g: parseInt(e.target.value || "0", 10) }
+                                : x
+                            )
                           )
-                        )
-                      }
-                      onBlur={() =>
-                        adminUpdateOrigin(o.code, { stock_g: Number(o.stock_g || 0) })
-                      }
-                      title="stock_g"
-                      disabled={!isAdmin}
-                    />
+                        }
+                        onBlur={() =>
+                          adminUpdateOrigin(o.code, { stock_g: Number(o.stock_g || 0) })
+                        }
+                        disabled={!isAdmin}
+                      />
+                    </div>
 
-                    <input
-                      className="apexInput"
-                      style={{ width: 120 }}
-                      type="number"
-                      step="0.01"
-                      value={Number(o.cost_per_g || 0)}
-                      onChange={(e) =>
-                        setAdminOrigins((prev) =>
-                          prev.map((x) =>
-                            x.code === o.code
-                              ? { ...x, cost_per_g: Number(e.target.value || "0") }
-                              : x
+                    <div className="apexField" style={{ margin: 0, width: 140 }}>
+                      <div className="apexLabel">Cost / g</div>
+                      <input
+                        className="apexInput"
+                        type="number"
+                        step="0.01"
+                        value={Number(o.cost_per_g || 0)}
+                        onChange={(e) =>
+                          setAdminOrigins((prev) =>
+                            prev.map((x) =>
+                              x.code === o.code
+                                ? { ...x, cost_per_g: Number(e.target.value || "0") }
+                                : x
+                            )
                           )
-                        )
-                      }
-                      onBlur={() =>
-                        adminUpdateOrigin(o.code, { cost_per_g: Number(o.cost_per_g || 0) })
-                      }
-                      title="cost_per_g"
-                      disabled={!isAdmin}
-                    />
+                        }
+                        onBlur={() =>
+                          adminUpdateOrigin(o.code, { cost_per_g: Number(o.cost_per_g || 0) })
+                        }
+                        disabled={!isAdmin}
+                      />
+                    </div>
 
                     <button
                       className="apexPillBtn"
                       type="button"
                       onClick={() => adminUpdateOrigin(o.code, { is_active: !o.is_active })}
                       disabled={!isAdmin}
+                      title="Toggle active"
+                      style={{ height: 42 }}
                     >
                       {o.is_active ? "Disable" : "Enable"}
                     </button>
@@ -2806,6 +2855,7 @@ function MainApp() {
                       onClick={() => adminDeactivateOrigin(o.code)}
                       disabled={!isAdmin}
                       title="Soft delete (is_active=false, stock=0)"
+                      style={{ height: 42 }}
                     >
                       Remove
                     </button>
