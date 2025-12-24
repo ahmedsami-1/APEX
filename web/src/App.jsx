@@ -5,6 +5,17 @@ import { supabase } from "./supabaseClient";
 import { Auth } from "@supabase/auth-ui-react";
 import { ThemeSupa } from "@supabase/auth-ui-shared";
 
+// ✅ Premium chart (Radar)
+import {
+  ResponsiveContainer,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar,
+  Tooltip,
+} from "recharts";
+
 /**
  * API base:
  * - لو شغال لوكال: حط VITE_API_BASE=http://localhost:3001
@@ -114,6 +125,136 @@ function statusClass(s) {
     default:
       return "";
   }
+}
+
+/* =========================
+   Premium Blend Chart (Radar)
+   ========================= */
+function BlendPremiumRadar({ blend }) {
+  const chart = blend?.chart;
+  if (!chart?.axes?.length || !chart?.series?.length) return null;
+
+  const [sBlend, sTarget] = chart.series;
+
+  const data = chart.axes.map((ax, i) => ({
+    axis: ax.label,
+    blend: Number(sBlend?.values?.[i] ?? 0),
+    target: Number(sTarget?.values?.[i] ?? 0),
+  }));
+
+  const score = (() => {
+    const diffs = data.map((d) => Math.abs(d.blend - d.target));
+    const avg = diffs.reduce((a, b) => a + b, 0) / Math.max(1, diffs.length);
+    const s = Math.max(0, Math.min(100, Math.round(100 - avg * 10)));
+    return s;
+  })();
+
+  return (
+    <div className="apexBlendChartWrap">
+      <div className="apexBlendChartTop">
+        <div>
+          <div className="apexBlendChartTitle">Your Blend Profile</div>
+          <div className="apexBlendChartSub">
+            Measured from your recipe components (data-bound).
+          </div>
+        </div>
+
+        <div
+          className="apexBlendScorePill"
+          title="How close your blend is to your target profile"
+        >
+          <div className="apexBlendScoreNum">{score}</div>
+          <div className="apexBlendScoreTxt">Match</div>
+        </div>
+      </div>
+
+      <div className="apexBlendChartFrame">
+        <ResponsiveContainer width="100%" height={320}>
+          <RadarChart data={data} outerRadius="72%">
+            <PolarGrid />
+            <PolarAngleAxis
+              dataKey="axis"
+              tick={{ fill: "rgba(255,255,255,0.82)", fontSize: 12 }}
+            />
+            <PolarRadiusAxis
+              angle={30}
+              domain={[0, 10]}
+              tick={{ fill: "rgba(255,255,255,0.55)", fontSize: 11 }}
+              axisLine={false}
+            />
+
+            <Radar
+              name="Your Target"
+              dataKey="target"
+              stroke="rgba(255,255,255,0.55)"
+              fill="rgba(255,255,255,0.10)"
+              fillOpacity={1}
+            />
+
+            <Radar
+              name="Your Blend"
+              dataKey="blend"
+              stroke="rgba(255,215,120,0.95)"
+              fill="rgba(255,215,120,0.20)"
+              fillOpacity={1}
+            />
+
+            <Tooltip
+              contentStyle={{
+                background: "rgba(10,10,10,0.92)",
+                border: "1px solid rgba(255,255,255,0.14)",
+                borderRadius: 12,
+                boxShadow: "0 18px 44px rgba(0,0,0,0.45)",
+                color: "rgba(255,255,255,0.92)",
+              }}
+              labelStyle={{
+                color: "rgba(255,255,255,0.75)",
+                fontWeight: 800,
+              }}
+              itemStyle={{
+                color: "rgba(255,255,255,0.92)",
+                fontWeight: 800,
+              }}
+            />
+          </RadarChart>
+        </ResponsiveContainer>
+
+        <div className="apexBlendChartLegend">
+          <div className="apexLegendItem">
+            <span className="apexLegendDot apexLegendDotGold" /> Your Blend
+          </div>
+          <div className="apexLegendItem">
+            <span className="apexLegendDot apexLegendDotWhite" /> Your Target
+          </div>
+        </div>
+      </div>
+
+      <div className="apexBlendChartMiniGrid">
+        {data.map((d) => {
+          const delta = Math.round((d.blend - d.target) * 10) / 10;
+          const sign = delta > 0 ? "+" : "";
+          return (
+            <div key={d.axis} className="apexMiniStat">
+              <div className="apexMiniStatK">{d.axis}</div>
+              <div className="apexMiniStatV">
+                <span className="apexMiniStatBlend">{d.blend.toFixed(1)}</span>
+                <span className="apexMiniStatSep">/</span>
+                <span className="apexMiniStatTarget">{d.target.toFixed(1)}</span>
+              </div>
+              <div
+                className={`apexMiniStatD ${
+                  delta === 0 ? "isZero" : delta > 0 ? "isUp" : "isDown"
+                }`}
+              >
+                Δ {sign}
+                {delta.toFixed(1)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 /* =========================
@@ -948,7 +1089,7 @@ function MainApp() {
   const [blend, setBlend] = useState(null);
   const [blendErr, setBlendErr] = useState("");
 
-  // Save blends (legacy table, لو مش موجودة هتطلع errors في الكونسل)
+  // Save blends
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [savedBlends, setSavedBlends] = useState([]);
@@ -1208,6 +1349,8 @@ function MainApp() {
         recipe: blend.recipe,
         price: Number(blend.price || 0),
         pricing: blend.pricing ?? null,
+        // ✅ keep chart if you want (optional, if column exists)
+        // chart: blend.chart ?? null,
       };
 
       const { error } = await supabase.from("saved_blends").insert([row]);
@@ -1234,6 +1377,7 @@ function MainApp() {
       recipe: Array.isArray(blend.recipe) ? blend.recipe : [],
       pricing: blend.pricing ?? null,
       why: blend.why ?? null,
+      chart: blend.chart ?? null,
     };
 
     setCart((prev) => [item, ...prev]);
@@ -1258,6 +1402,7 @@ function MainApp() {
       size_g: Number(b.size_g || 250),
       price: Number(b.price || 0),
       recipe: Array.isArray(b.recipe) ? b.recipe : [],
+      // chart: b.chart ?? null, // لو مخزنها
     };
 
     setCart((prev) => [item, ...prev]);
@@ -1384,6 +1529,7 @@ function MainApp() {
           pricing: it.pricing ?? null,
           why: it.why ?? null,
           notes: it.notes ?? null,
+          chart: it.chart ?? null, // ✅ optionally store
         },
       }));
 
@@ -1459,57 +1605,53 @@ function MainApp() {
     }
   }
 
-async function getAccessToken() {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) console.log("getSession error:", error);
+  async function getAccessToken() {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) console.log("getSession error:", error);
 
-  const token = data?.session?.access_token || null;
-  console.log("ADMIN token exists?", !!token);
-  if (token) console.log("ADMIN token prefix:", token.slice(0, 20));
+    const token = data?.session?.access_token || null;
+    console.log("ADMIN token exists?", !!token);
+    if (token) console.log("ADMIN token prefix:", token.slice(0, 20));
 
-  return token;
-}
-
-
-
-async function adminLoadOrders() {
-  setAdminErr("");
-  setAdminLoading(true);
-
-  try {
-    const token = await getAccessToken();
-    if (!token) throw new Error("Not logged in (no access_token)");
-
-    console.log("ADMIN sending Authorization header…");
-
-    const res = await fetch(apiUrl("/api/admin/orders?limit=200"), {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-    });
-
-    const ct = res.headers.get("content-type") || "";
-    const body = ct.includes("application/json")
-      ? await res.json().catch(() => ({}))
-      : await res.text();
-
-    if (!res.ok) {
-      const msg = typeof body === "string" ? body.slice(0, 200) : (body?.error || "Failed");
-      throw new Error(msg);
-    }
-
-    setAdminOrders(body.orders || []);
-  } catch (e) {
-    console.log("ADMIN ERROR:", e);
-    setAdminErr(String(e?.message || e));
-  } finally {
-    setAdminLoading(false);
+    return token;
   }
-}
 
+  async function adminLoadOrders() {
+    setAdminErr("");
+    setAdminLoading(true);
 
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not logged in (no access_token)");
 
+      console.log("ADMIN sending Authorization header…");
+
+      const res = await fetch(apiUrl("/api/admin/orders?limit=200"), {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const ct = res.headers.get("content-type") || "";
+      const body = ct.includes("application/json")
+        ? await res.json().catch(() => ({}))
+        : await res.text();
+
+      if (!res.ok) {
+        const msg =
+          typeof body === "string" ? body.slice(0, 200) : body?.error || "Failed";
+        throw new Error(msg);
+      }
+
+      setAdminOrders(body.orders || []);
+    } catch (e) {
+      console.log("ADMIN ERROR:", e);
+      setAdminErr(String(e?.message || e));
+    } finally {
+      setAdminLoading(false);
+    }
+  }
 
   async function adminSetStatus(orderId, nextStatus) {
     setAdminUpdatingId(orderId);
@@ -1535,7 +1677,6 @@ async function adminLoadOrders() {
         prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o))
       );
 
-      // important: selected view should also update + keep items
       if (adminSelected?.id === updated.id) {
         setAdminSelected((s) => (s ? { ...s, ...updated } : s));
       }
@@ -1583,7 +1724,8 @@ async function adminLoadOrders() {
   const hasRequiredDetails =
     customerName.trim() && customerPhone.trim() && customerAddress.trim();
   const hasLocation = !!(location?.lat && location?.lng);
-  const canPlaceOrder = cart.length > 0 && hasRequiredDetails && hasLocation && !placingOrder;
+  const canPlaceOrder =
+    cart.length > 0 && hasRequiredDetails && hasLocation && !placingOrder;
   const quickNavHidden = authOpen || adminOpen;
 
   return (
@@ -1709,9 +1851,7 @@ async function adminLoadOrders() {
                 </button>
                 <button
                   type="button"
-                  className={`apexSegBtn ${
-                    line === "premium" ? "isActive" : ""
-                  }`}
+                  className={`apexSegBtn ${line === "premium" ? "isActive" : ""}`}
                   onClick={() => setLine("premium")}
                 >
                   Premium (best taste)
@@ -1737,9 +1877,7 @@ async function adminLoadOrders() {
               <select
                 className="apexSelect"
                 value={prefs.method}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, method: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, method: e.target.value }))}
               >
                 {METHOD_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1754,9 +1892,7 @@ async function adminLoadOrders() {
               <select
                 className="apexSelect"
                 value={prefs.strength}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, strength: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, strength: e.target.value }))}
               >
                 {STRENGTH_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1788,9 +1924,7 @@ async function adminLoadOrders() {
               <select
                 className="apexSelect"
                 value={prefs.acidity}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, acidity: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, acidity: e.target.value }))}
               >
                 {ACIDITY_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1805,9 +1939,7 @@ async function adminLoadOrders() {
               <select
                 className="apexSelect"
                 value={prefs.time}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, time: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, time: e.target.value }))}
               >
                 {TIME_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1822,9 +1954,7 @@ async function adminLoadOrders() {
               <select
                 className="apexSelect"
                 value={prefs.milk}
-                onChange={(e) =>
-                  setPrefs((p) => ({ ...p, milk: e.target.value }))
-                }
+                onChange={(e) => setPrefs((p) => ({ ...p, milk: e.target.value }))}
               >
                 {MILK_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1843,17 +1973,13 @@ async function adminLoadOrders() {
             <div className="apexResult">
               <div className="apexResultTop">
                 <div>
-                  <div className="apexBlendName">
-                    {safeText(blend.blend_name_suggestion)}
-                  </div>
+                  <div className="apexBlendName">{safeText(blend.blend_name_suggestion)}</div>
                   <div className="apexBlendWhy">{safeText(blend.why)}</div>
                 </div>
 
                 <div className="apexPriceBox">
                   <div className="apexPriceLabel">Price</div>
-                  <div className="apexPrice">
-                    {Number(blend.price || 0)} EGP
-                  </div>
+                  <div className="apexPrice">{Number(blend.price || 0)} EGP</div>
                 </div>
               </div>
 
@@ -1863,17 +1989,16 @@ async function adminLoadOrders() {
                 {blend.recipe.map((r, idx) => (
                   <div className="apexRecipeRow" key={`${r.origin_code}-${idx}`}>
                     <div className="apexRecipeOrigin">
-                      <div className="apexRecipeName">
-                        {safeText(r.origin_name)}
-                      </div>
-                      <div className="apexRecipeCode">
-                        {safeText(r.origin_code)}
-                      </div>
+                      <div className="apexRecipeName">{safeText(r.origin_name)}</div>
+                      <div className="apexRecipeCode">{safeText(r.origin_code)}</div>
                     </div>
                     <div className="apexRecipeGrams">{Number(r.grams)}g</div>
                   </div>
                 ))}
               </div>
+
+              {/* ✅ Premium Radar Chart */}
+              <BlendPremiumRadar blend={blend} />
 
               <div className="apexResultActions">
                 <button
@@ -1911,8 +2036,7 @@ async function adminLoadOrders() {
           <div className="apexCardHead">
             <div>
               <div className="apexCardTitle">
-                Cart & Checkout{" "}
-                <span className="apexCountBadge">{cart.length}</span>
+                Cart & Checkout <span className="apexCountBadge">{cart.length}</span>
               </div>
               <div className="apexCardSub">Cash on delivery MVP</div>
             </div>
@@ -2002,8 +2126,7 @@ async function adminLoadOrders() {
             </div>
 
             <div className="apexCartTitle" style={{ marginTop: 14 }}>
-              Delivery location (Google Maps){" "}
-              <span style={{ opacity: 0.8 }}>(required)</span>
+              Delivery location (Google Maps) <span style={{ opacity: 0.8 }}>(required)</span>
             </div>
 
             <GoogleMapsPicker value={location} onChange={setLocation} />
@@ -2092,7 +2215,15 @@ async function adminLoadOrders() {
                     Order #{String(o.id).slice(0, 8).toUpperCase()}
                   </div>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      flexWrap: "wrap",
+                      marginTop: 6,
+                    }}
+                  >
                     <span
                       className={`apexSavedMeta ${statusClass(o.status)}`}
                       style={{
@@ -2151,7 +2282,9 @@ async function adminLoadOrders() {
                     ) : null}
                   </div>
 
-                  <div className="apexRecipeTitle" style={{ marginTop: 10 }}>Items</div>
+                  <div className="apexRecipeTitle" style={{ marginTop: 10 }}>
+                    Items
+                  </div>
 
                   {o.items?.length ? (
                     <div className="apexRecipeGrid" style={{ marginTop: 8 }}>
@@ -2262,7 +2395,8 @@ async function adminLoadOrders() {
                   <div key={o.id} className="apexRecipeRow" style={{ alignItems: "flex-start" }}>
                     <div style={{ flex: "1 1 auto" }}>
                       <div style={{ fontWeight: 900 }}>
-                        Order #{String(o.id).slice(0, 8).toUpperCase()} • {Number(o.total || 0)} {safeText(o.currency || "EGP")}
+                        Order #{String(o.id).slice(0, 8).toUpperCase()} • {Number(o.total || 0)}{" "}
+                        {safeText(o.currency || "EGP")}
                       </div>
                       <div className="apexTinyNote" style={{ marginTop: 6 }}>
                         <b>{safeText(o.customer_name)}</b> • {safeText(o.customer_phone)} <br />
@@ -2370,7 +2504,8 @@ async function adminLoadOrders() {
                       </>
                     ) : null}
                     <b>Payment:</b> {safeText(adminSelected.payment)} <br />
-                    <b>Created:</b> {adminSelected.created_at ? new Date(adminSelected.created_at).toLocaleString() : ""} <br />
+                    <b>Created:</b> {adminSelected.created_at ? new Date(adminSelected.created_at).toLocaleString() : ""}{" "}
+                    <br />
                     {adminSelected.updated_at ? (
                       <>
                         <b>Updated:</b> {new Date(adminSelected.updated_at).toLocaleString()} <br />
@@ -2384,7 +2519,8 @@ async function adminLoadOrders() {
                       <div className="apexTinyNote">
                         {safeText(adminSelected.location_address || "Pinned")}
                         <br />
-                        lat: {Number(adminSelected.location_lat).toFixed(6)} | lng: {Number(adminSelected.location_lng).toFixed(6)}
+                        lat: {Number(adminSelected.location_lat).toFixed(6)} | lng:{" "}
+                        {Number(adminSelected.location_lng).toFixed(6)}
                         <br />
                         {adminSelected.location_maps_url ? (
                           <a href={adminSelected.location_maps_url} target="_blank" rel="noreferrer">
@@ -2395,7 +2531,9 @@ async function adminLoadOrders() {
                     </div>
                   ) : null}
 
-                  <div className="apexRecipeTitle" style={{ marginTop: 14 }}>Items</div>
+                  <div className="apexRecipeTitle" style={{ marginTop: 14 }}>
+                    Items
+                  </div>
                   {adminSelected.items?.length ? (
                     <div className="apexRecipeGrid" style={{ marginTop: 8 }}>
                       {adminSelected.items.map((it) => (
@@ -2434,14 +2572,14 @@ async function adminLoadOrders() {
                           color: "rgba(255,255,255,.78)",
                         }}
                       >
-{JSON.stringify(
-  {
-    preferences: adminSelected.preferences ?? null,
-    location_snapshot: adminSelected.location_snapshot ?? null,
-  },
-  null,
-  2
-)}
+                        {JSON.stringify(
+                          {
+                            preferences: adminSelected.preferences ?? null,
+                            location_snapshot: adminSelected.location_snapshot ?? null,
+                          },
+                          null,
+                          2
+                        )}
                       </pre>
                     </div>
                   ) : null}

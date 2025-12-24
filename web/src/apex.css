@@ -13,6 +13,10 @@
   --r: 18px;
   --r2: 24px;
   --max: 1180px;
+
+  /* extra tokens */
+  --focus: rgba(215,182,92,.55);
+  --danger: rgba(255,70,70,.25);
 }
 
 *{ box-sizing:border-box; }
@@ -25,6 +29,31 @@ body{
     radial-gradient(1200px 600px at 20% -10%, rgba(215,182,92,.18), transparent 55%),
     radial-gradient(900px 500px at 90% 0%, rgba(255,255,255,.06), transparent 60%),
     linear-gradient(180deg, var(--bg0), var(--bg1));
+}
+
+/* ===== Nice scrollbars (webkit) ===== */
+*::-webkit-scrollbar{ width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb{
+  background: rgba(255,255,255,.10);
+  border: 2px solid rgba(0,0,0,.35);
+  border-radius: 999px;
+}
+*::-webkit-scrollbar-thumb:hover{ background: rgba(255,255,255,.16); }
+*::-webkit-scrollbar-track{ background: rgba(0,0,0,.25); }
+
+/* ===== Focus ring ===== */
+.apexSelect:focus,
+.apexInput:focus,
+.apexTextarea:focus,
+.apexPillBtn:focus,
+.apexBtnGold:focus,
+.apexSegBtn:focus,
+.apexModalClose:focus{
+  outline: none;
+  border-color: rgba(215,182,92,.55);
+  box-shadow:
+    0 0 0 3px rgba(215,182,92,.12),
+    0 18px 50px rgba(0,0,0,.25);
 }
 
 .apexApp{
@@ -92,12 +121,24 @@ body{
   border-radius: 14px;
   cursor:pointer;
   box-shadow: 0 10px 24px rgba(0,0,0,.18);
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
 }
-.apexPillBtn:hover{ border-color: var(--stroke2); }
+.apexPillBtn:hover{
+  border-color: var(--stroke2);
+  background: rgba(255,255,255,.06);
+  transform: translateY(-1px);
+}
+.apexPillBtn:active{
+  transform: translateY(0);
+}
 
 .apexPillBtnGold{
   border-color: rgba(215,182,92,.38);
   background: rgba(215,182,92,.10);
+}
+.apexPillBtnGold:hover{
+  border-color: rgba(215,182,92,.55);
+  background: rgba(215,182,92,.14);
 }
 
 .apexSubline{
@@ -248,10 +289,18 @@ body{
   cursor:pointer;
   font-weight: 700;
   box-shadow: 0 18px 38px rgba(0,0,0,.30);
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
 }
+.apexBtnGold:hover{
+  transform: translateY(-1px);
+  border-color: rgba(215,182,92,.65);
+  background: linear-gradient(180deg, rgba(215,182,92,.26), rgba(215,182,92,.12));
+}
+.apexBtnGold:active{ transform: translateY(0); }
 .apexBtnGold:disabled{
   opacity:.6;
   cursor:not-allowed;
+  transform:none;
 }
 
 .apexBadges{
@@ -293,7 +342,13 @@ body{
   padding: 12px 12px;
   border-radius: 14px;
   outline:none;
+  transition: border-color .12s ease, background .12s ease, box-shadow .12s ease;
 }
+.apexSelect:hover, .apexInput:hover, .apexTextarea:hover{
+  border-color: rgba(255,255,255,.16);
+  background: rgba(0,0,0,.34);
+}
+
 .apexTextarea{
   min-height: 90px;
   resize: vertical;
@@ -313,7 +368,15 @@ body{
   border-radius: 14px;
   cursor:pointer;
   font-weight: 700;
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
 }
+.apexSegBtn:hover{
+  border-color: rgba(255,255,255,.16);
+  background: rgba(255,255,255,.05);
+  transform: translateY(-1px);
+}
+.apexSegBtn:active{ transform: translateY(0); }
+
 .apexSegBtn.isActive{
   border-color: rgba(215,182,92,.55);
   background: rgba(215,182,92,.14);
@@ -523,6 +586,12 @@ body{
   background: rgba(0,0,0,.22);
   border-radius: 18px;
   padding: 12px 12px;
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
+}
+.apexSavedCard:hover{
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,.14);
+  background: rgba(0,0,0,.26);
 }
 
 .apexSavedName{
@@ -580,7 +649,14 @@ body{
   border-radius: 12px;
   padding: 8px 10px;
   cursor:pointer;
+  transition: transform .12s ease, border-color .12s ease, background .12s ease;
 }
+.apexModalClose:hover{
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,.20);
+  background: rgba(255,255,255,.08);
+}
+.apexModalClose:active{ transform: translateY(0); }
 
 .apexAccountBox{
   display:flex;
@@ -591,6 +667,69 @@ body{
 
 .apexAccountLine{
   color: rgba(255,255,255,.78);
+}
+
+/* =========================
+   Google Maps Picker (luxury)
+   ========================= */
+.apexInput::placeholder,
+.apexTextarea::placeholder{
+  color: rgba(255,255,255,.35);
+}
+
+.apexInput[disabled],
+.apexTextarea[disabled],
+.apexSelect[disabled]{
+  opacity: .60;
+  cursor: not-allowed;
+}
+
+.apexMapHint{
+  font-size: 12px;
+  color: rgba(255,255,255,.65);
+}
+
+/* =========================
+   Stepper (optional)
+   if you later move inline styles -> classes
+   ========================= */
+.apexStepper{
+  max-width: var(--max);
+  margin: 12px auto 0;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  padding: 10px 12px;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.28);
+}
+.apexStepperBtns{
+  display:flex;
+  gap: 10px;
+  flex-wrap:wrap;
+}
+.apexStepBtn{
+  cursor:pointer;
+  border-radius: 999px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.90);
+  transition: transform .12s ease, background .12s ease, border-color .12s ease;
+}
+.apexStepBtn:hover{
+  transform: translateY(-1px);
+  border-color: rgba(255,255,255,0.20);
+  background: rgba(255,255,255,0.08);
+}
+.apexStepBtn.isActive{
+  background: rgba(255,255,255,0.20);
+}
+.apexStepBtn.isDone{
+  background: rgba(255,255,255,0.10);
 }
 
 /* ===== Responsive ===== */
@@ -625,21 +764,13 @@ body{
     grid-template-columns: 1fr;
   }
 }
-.apexStatusNew {
-  color: #c9a24d;
-}
 
-.apexStatusProgress {
-  color: #ffb020;
-}
-
-.apexStatusDelivering {
-  color: #4da3ff;
-}
-
-.apexStatusDelivered {
-  color: #4caf50;
-}
+/* ===== Status colors ===== */
+.apexStatusNew { color: #c9a24d; }
+.apexStatusProgress { color: #ffb020; }
+.apexStatusDelivering { color: #4da3ff; }
+.apexStatusDelivered { color: #4caf50; }
+.apexStatusCancelled { color: #ff6a6a; }
 
 .apexCountBadge{
   display:inline-flex;
@@ -655,3 +786,178 @@ body{
   background:rgba(255,255,255,0.10);
   border:1px solid rgba(255,255,255,0.14);
 }
+
+/* =========================
+   Premium Blend Chart
+   ========================= */
+
+.apexBlendChartWrap{
+  margin-top: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background:
+    radial-gradient(1200px 420px at 15% 10%, rgba(255,215,120,0.10), transparent 55%),
+    radial-gradient(900px 380px at 85% 20%, rgba(255,255,255,0.08), transparent 55%),
+    rgba(255,255,255,0.03);
+  box-shadow: 0 22px 60px rgba(0,0,0,0.38);
+  overflow: hidden;
+}
+
+.apexBlendChartTop{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap: 12px;
+  padding: 14px 14px 8px;
+}
+
+.apexBlendChartTitle{
+  font-weight: 950;
+  letter-spacing: 0.2px;
+  font-size: 15px;
+  color: rgba(255,255,255,0.92);
+}
+
+.apexBlendChartSub{
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.78;
+  font-weight: 700;
+}
+
+.apexBlendScorePill{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  min-width: 74px;
+  height: 52px;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background:
+    linear-gradient(180deg, rgba(255,215,120,0.18), rgba(255,255,255,0.05));
+  box-shadow: 0 16px 40px rgba(0,0,0,0.35);
+  backdrop-filter: blur(10px);
+}
+
+.apexBlendScoreNum{
+  font-weight: 1000;
+  font-size: 18px;
+  line-height: 1;
+  color: rgba(255,225,140,0.98);
+  text-shadow: 0 0 22px rgba(255,215,120,0.25);
+}
+
+.apexBlendScoreTxt{
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 900;
+  opacity: 0.75;
+  letter-spacing: 0.4px;
+}
+
+.apexBlendChartFrame{
+  padding: 10px 12px 14px;
+  position: relative;
+}
+
+.apexBlendChartFrame:before{
+  content:"";
+  position:absolute;
+  inset: 0;
+  pointer-events:none;
+  background:
+    radial-gradient(380px 240px at 50% 45%, rgba(255,215,120,0.10), transparent 70%);
+  filter: blur(0.2px);
+}
+
+.apexBlendChartLegend{
+  display:flex;
+  gap: 12px;
+  justify-content:center;
+  margin-top: 8px;
+  font-size: 12px;
+  font-weight: 850;
+  opacity: 0.88;
+}
+
+.apexLegendItem{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+}
+
+.apexLegendDot{
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.20);
+  box-shadow: 0 10px 20px rgba(0,0,0,0.35);
+}
+
+.apexLegendDotGold{
+  background: rgba(255,215,120,0.85);
+}
+
+.apexLegendDotWhite{
+  background: rgba(255,255,255,0.55);
+}
+
+.apexBlendChartMiniGrid{
+  display:grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 12px 14px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+@media (max-width: 900px){
+  .apexBlendChartMiniGrid{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.apexMiniStat{
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.22);
+  padding: 10px 10px;
+  box-shadow: 0 14px 30px rgba(0,0,0,0.28);
+}
+
+.apexMiniStatK{
+  font-size: 11px;
+  font-weight: 900;
+  opacity: 0.78;
+  letter-spacing: 0.35px;
+}
+
+.apexMiniStatV{
+  margin-top: 6px;
+  display:flex;
+  align-items:baseline;
+  gap: 6px;
+  font-weight: 950;
+}
+
+.apexMiniStatBlend{
+  color: rgba(255,225,140,0.98);
+  text-shadow: 0 0 18px rgba(255,215,120,0.18);
+}
+
+.apexMiniStatTarget{
+  color: rgba(255,255,255,0.70);
+}
+
+.apexMiniStatSep{
+  opacity: 0.35;
+}
+
+.apexMiniStatD{
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 900;
+  opacity: 0.85;
+}
+
+.apexMiniStatD.isUp{ color: rgba(255,215,120,0.92); }
+.apexMiniStatD.isDown{ color: rgba(140,200,255,0.85); }
+.apexMiniStatD.isZero{ color: rgba(255,255,255,0.62); }

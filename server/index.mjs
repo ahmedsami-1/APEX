@@ -31,7 +31,6 @@ const allowedOrigins = Array.from(new Set([...defaultCors, ...extraCors]));
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow server-to-server or tools
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS: " + origin));
@@ -43,17 +42,18 @@ app.use(
 app.use(express.json({ limit: "1mb" }));
 
 // ================== OpenAI client ==================
-if (!process.env.OPENAI_API_KEY) {
-  console.warn("⚠️ Missing OPENAI_API_KEY");
-}
+if (!process.env.OPENAI_API_KEY) console.warn("⚠️ Missing OPENAI_API_KEY");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Model via ENV (easy switch)
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.2"; // set OPENAI_MODEL=gpt-5.2
+const OPENAI_TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE ?? "0.2");
 
 // ================== Supabase Admin (server-only) ==================
 if (!process.env.SUPABASE_URL) console.warn("⚠️ Missing SUPABASE_URL");
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY)
   console.warn("⚠️ Missing SUPABASE_SERVICE_ROLE_KEY");
 
-// IMPORTANT: service role should only live on server
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
@@ -62,12 +62,27 @@ const supabaseAdmin = createClient(
 
 /**
  * Load coffee origins from DB (stock aware).
- * origins table expected columns:
- * code, name, stock_g, cost_per_g, notes, acidity, body, is_active
+ * origins columns expected:
+ * code, name, stock_g, cost_per_g, notes, is_active,
+ * acidity, body, sweetness, bitterness, aroma, fruitiness, chocolate, nutty
  */
 async function loadOriginsFromDB({ onlyAvailable = true } = {}) {
-  const sel =
-    "code, name, stock_g, cost_per_g, notes, acidity, body, is_active";
+  const sel = [
+    "code",
+    "name",
+    "stock_g",
+    "cost_per_g",
+    "notes",
+    "is_active",
+    "acidity",
+    "body",
+    "sweetness",
+    "bitterness",
+    "aroma",
+    "fruitiness",
+    "chocolate",
+    "nutty",
+  ].join(", ");
 
   let q = supabaseAdmin.from("origins").select(sel);
 
@@ -77,14 +92,27 @@ async function loadOriginsFromDB({ onlyAvailable = true } = {}) {
   const { data, error } = await q.order("cost_per_g", { ascending: true });
   if (error) throw new Error("origins db error: " + error.message);
 
+  const clamp01to10 = (v, def = 5) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return def;
+    return Math.max(1, Math.min(10, n));
+  };
+
   return (data || []).map((o) => ({
     code: String(o.code),
     name: String(o.name || o.code),
-    maxGrams: Math.max(0, parseInt(o.stock_g ?? 0, 10)), // stock in grams
+    maxGrams: Math.max(0, parseInt(o.stock_g ?? 0, 10)),
     costPerG: Number(o.cost_per_g ?? 0),
     notes: Array.isArray(o.notes) ? o.notes : [],
-    acidity: Number(o.acidity ?? 5),
-    body: Number(o.body ?? 5),
+    // sensory 1..10
+    acidity: clamp01to10(o.acidity, 5),
+    body: clamp01to10(o.body, 5),
+    sweetness: clamp01to10(o.sweetness, 5),
+    bitterness: clamp01to10(o.bitterness, 5),
+    aroma: clamp01to10(o.aroma, 5),
+    fruitiness: clamp01to10(o.fruitiness, 5),
+    chocolate: clamp01to10(o.chocolate, 5),
+    nutty: clamp01to10(o.nutty, 5),
   }));
 }
 
@@ -103,25 +131,20 @@ async function requireAdmin(req, res, next) {
   try {
     const auth = req.headers.authorization || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-
     if (!token) return res.status(401).json({ error: "Missing bearer token" });
 
     const jwtSecret = process.env.SUPABASE_JWT_SECRET;
-    if (!jwtSecret) {
+    if (!jwtSecret)
       return res
         .status(500)
         .json({ error: "Server missing SUPABASE_JWT_SECRET" });
-    }
 
-    // Verify Supabase JWT
     const payload = jwt.verify(token, jwtSecret);
 
     const email = payload?.email || payload?.user_metadata?.email || "";
     if (!email) return res.status(401).json({ error: "Invalid token (no email)" });
 
-    if (!isAdminEmail(email)) {
-      return res.status(403).json({ error: "Not admin" });
-    }
+    if (!isAdminEmail(email)) return res.status(403).json({ error: "Not admin" });
 
     req.adminUser = { id: payload.sub, email };
     next();
@@ -165,15 +188,159 @@ function safeStr(v, fallback = "") {
   return String(v);
 }
 
-function clampInt(v, min, max) {
-  const n = parseInt(v, 10);
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, Math.min(max, n));
-}
-
 function gramsSum(recipe) {
   if (!Array.isArray(recipe)) return 0;
   return recipe.reduce((s, r) => s + (Number(r?.grams) || 0), 0);
+}
+
+function clamp10(v, def = 5) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return def;
+  return Math.max(1, Math.min(10, n));
+}
+
+const CHART_AXES = [
+  { key: "body", label: "Body" },
+  { key: "acidity", label: "Acidity" },
+  { key: "sweetness", label: "Sweetness" },
+  { key: "bitterness", label: "Bitterness" },
+  { key: "aroma", label: "Aroma" },
+  { key: "fruitiness", label: "Fruitiness" },
+  { key: "chocolate", label: "Chocolate" },
+  { key: "nutty", label: "Nutty" },
+];
+
+function computeBlendProfile(recipe, originMap) {
+  const total = gramsSum(recipe);
+  if (!total) {
+    const empty = {};
+    for (const a of CHART_AXES) empty[a.key] = 0;
+    return empty;
+  }
+
+  const out = {};
+  for (const a of CHART_AXES) out[a.key] = 0;
+
+  for (const r of recipe) {
+    const o = originMap.get(r.origin_code);
+    if (!o) continue;
+    const w = (Number(r.grams) || 0) / total;
+    for (const a of CHART_AXES) {
+      out[a.key] += w * clamp10(o[a.key], 5);
+    }
+  }
+
+  // 1 decimal
+  for (const a of CHART_AXES) out[a.key] = Math.round(out[a.key] * 10) / 10;
+
+  return out;
+}
+
+/**
+ * Convert user preferences -> target sensory profile (1..10).
+ * We keep it conservative: it's a "target dial", not a fake tasting claim.
+ * This helps AI explain "based on what exactly".
+ */
+function deriveTargetProfile(preferences) {
+  const p = preferences || {};
+  const method = safeStr(p.method || p.brew_method || "").toLowerCase();
+  const strength = safeStr(p.strength || "").toLowerCase();
+  const flavor = safeStr(p.flavor_direction || p.flavor || "").toLowerCase();
+  const milk = safeStr(p.milk || p.with_milk || "").toLowerCase();
+  const acidityPref = p.acidity_level ?? p.acidity ?? null;
+
+  // neutral baseline
+  const t = {
+    body: 5,
+    acidity: 5,
+    sweetness: 5,
+    bitterness: 5,
+    aroma: 5,
+    fruitiness: 5,
+    chocolate: 5,
+    nutty: 5,
+  };
+
+  // method nudges
+  if (method.includes("espresso")) {
+    t.body += 2;
+    t.bitterness += 1;
+    t.acidity -= 1;
+    t.chocolate += 1;
+  } else if (method.includes("v60") || method.includes("pour") || method.includes("filter")) {
+    t.acidity += 2;
+    t.aroma += 1;
+    t.fruitiness += 2;
+    t.body -= 1;
+  } else if (method.includes("french")) {
+    t.body += 2;
+    t.chocolate += 1;
+    t.nutty += 1;
+  }
+
+  // strength
+  if (strength.includes("strong") || strength.includes("high")) {
+    t.body += 1;
+    t.bitterness += 1;
+  } else if (strength.includes("light") || strength.includes("mild")) {
+    t.body -= 1;
+    t.bitterness -= 1;
+    t.acidity += 1;
+  }
+
+  // milk
+  if (milk.includes("yes") || milk.includes("with") || milk.includes("milk")) {
+    t.body += 1;
+    t.chocolate += 1;
+    t.nutty += 1;
+    t.acidity -= 1;
+  }
+
+  // flavor direction
+  if (flavor.includes("fruity") || flavor.includes("floral")) {
+    t.fruitiness += 3;
+    t.aroma += 1;
+    t.chocolate -= 1;
+    t.nutty -= 1;
+  } else if (flavor.includes("choco") || flavor.includes("cocoa")) {
+    t.chocolate += 3;
+    t.fruitiness -= 1;
+    t.acidity -= 1;
+    t.body += 1;
+  } else if (flavor.includes("nut")) {
+    t.nutty += 3;
+    t.chocolate += 1;
+    t.fruitiness -= 1;
+  } else if (flavor.includes("balanced")) {
+    // keep near center
+    t.body += 0;
+  }
+
+  // explicit acidity preference overrides (if numeric)
+  if (acidityPref != null && Number.isFinite(Number(acidityPref))) {
+    t.acidity = clamp10(acidityPref, t.acidity);
+  }
+
+  // clamp
+  for (const k of Object.keys(t)) t[k] = clamp10(t[k], 5);
+
+  return t;
+}
+
+function buildChartPayload(blendProfile, targetProfile) {
+  return {
+    axes: CHART_AXES.map((a) => ({ key: a.key, label: a.label, min: 0, max: 10 })),
+    series: [
+      {
+        name: "Your Blend",
+        values: CHART_AXES.map((a) => Number(blendProfile?.[a.key] ?? 0)),
+      },
+      {
+        name: "Your Target",
+        values: CHART_AXES.map((a) => Number(targetProfile?.[a.key] ?? 0)),
+      },
+    ],
+  };
 }
 
 // ================== Validation / Scoring ==================
@@ -200,8 +367,7 @@ function violationScore(recipe, sizeG, originMap) {
     const o = originMap.get(r.origin_code);
     if (o) {
       const max = o.maxGrams;
-      if (g > max) score += (g - max) * 40; // heavy penalty for stock violation
-      // mild penalty for using nearly all remaining stock (business safety)
+      if (g > max) score += (g - max) * 40;
       if (max > 0 && g > Math.floor(max * 0.9)) score += 50;
     }
   }
@@ -241,8 +407,7 @@ function validateStrict(recipe, sizeG, originMap) {
 }
 
 /**
- * Autofix: strict correctness > taste nuance
- * (used only if all AI attempts fail)
+ * Autofix: strict correctness > taste nuance (last resort)
  */
 function autofixBestAttempt(recipe, sizeG, originMap) {
   let fixed = (Array.isArray(recipe) ? recipe : [])
@@ -300,7 +465,7 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
 // ================== Health ==================
 app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 
-// ================== Recommend (OpenAI, Stock-aware, High-Explainability) ==================
+// ================== Recommend (OpenAI, Stock-aware, High-Explainability + Chart) ==================
 app.post("/api/recommend", async (req, res) => {
   try {
     const { size_g, line, preferences } = req.body || {};
@@ -328,114 +493,169 @@ app.post("/api/recommend", async (req, res) => {
       maxGrams: o.maxGrams,
       costPerG: o.costPerG,
       notes: o.notes,
+      // sensory
       acidity: o.acidity,
       body: o.body,
+      sweetness: o.sweetness,
+      bitterness: o.bitterness,
+      aroma: o.aroma,
+      fruitiness: o.fruitiness,
+      chocolate: o.chocolate,
+      nutty: o.nutty,
     }));
 
-    // ====== Professional, novel output spec ======
-    // Idea: "Proof-of-choice" + "Counterfactuals" + "Taste persona letter"
+    const targetProfile = deriveTargetProfile(preferences);
+
+    // ====== Output spec: professional + "proof of choice" + persona letter ======
     const systemBase = `
 You are APEX Blend Architect: a coffee formulator + a rational explainer.
-You MUST be truthful and strictly bound to the provided available_origins data.
+You MUST be truthful and strictly bound to provided available_origins (notes + sensory numbers).
+You MUST NOT invent flavors beyond each origin's notes array.
 
-Return STRICT JSON only. No markdown. No extra keys. No extra commentary.
+Return STRICT JSON only.
 
-JSON SCHEMA (MUST match exactly):
-{
-  "blend_name_suggestion": "APEX ...",
-  "recipe": [
-    {
-      "origin_code": "BR_SANTOS",
-      "grams": 120,
-      "explain": {
-        "role_in_structure": "Base | Bridge | Accent | Depth | Brightness",
-        "why_this_origin": [
-          "Bullet: tie to preferences + origin notes/body/acidity",
-          "Bullet: tie to line (daily vs premium) and value"
-        ],
-        "why_this_grams": [
-          "Explain grams as a ratio decision (percentage-ish) and what it does in cup",
-          "Explain what would change if grams were +/- 20g"
-        ],
-        "difference_vs_alternatives": [
-          {
-            "alternative_origin_code": "CO_SUPREMO",
-            "why_not": "short, rational, data-bound reason",
-            "what_you_gain_by_current_choice": "short, rational"
-          }
-        ],
-        "honesty_clause": "One sentence confirming you only used provided notes and did not invent tasting claims."
-      }
-    }
-  ],
-  "optimality_proof": {
-    "objective": "daily|premium",
-    "constraints_checklist": [
-      "Total equals exactly ${size_g}g",
-      "2..5 origins, each >=20g integer",
-      "Each grams <= maxGrams (stock)",
-      "No duplicate origins"
-    ],
-    "score_logic": [
-      "Explain the optimization logic: value vs taste, and how stock limits shaped choices",
-      "Explain structure math: base %, accent %, balance"
-    ],
-    "counterfactuals": [
-      {
-        "change": "If we increase acidity one level",
-        "what_would_change_in_recipe": "one-liner",
-        "why_current_is_optimum_for_given_prefs": "one-liner"
-      }
-    ],
-    "stock_respect_notes": [
-      "Mention if you avoided using near-empty stock when possible",
-      "Mention if a bean is scarce and used as accent"
-    ]
-  },
-  "taste_persona_letter": {
-    "title": "Your Coffee Persona",
-    "opening": "2-3 sentences, respectful, no manipulation, grounded in inputs only",
-    "traits": [
-      { "label": "Taste compass", "evidence": "based on flavor_direction + acidity + milk" },
-      { "label": "Ritual style", "evidence": "based on time + brew method" },
-      { "label": "Power dial", "evidence": "based on strength choice" }
-    ],
-    "why_this_blend_matches_you": [
-      "Bullet 1",
-      "Bullet 2",
-      "Bullet 3"
-    ],
-    "how_to_brew_best": [
-      "Short practical brewing guidance matching method + milk"
-    ],
-    "closing": "One classy line."
-  }
-}
-
-HARD RULES:
-- Use ONLY origin_code values present in available_origins.
+Hard constraints:
+- Use ONLY origin_code from available_origins.
 - Total grams must equal exactly ${size_g}.
-- Recipe must contain 2 to 5 origins.
-- grams must be INTEGER.
-- Minimum 20g per origin.
-- Do not exceed maxGrams per origin.
-- Explanations must be data-bound: you can reference only notes/acidity/body/costPerG/stock/maxGrams.
-- No fake tasting claims: do not invent flavors not present in notes.
+- 2..5 origins.
+- grams integer.
+- min 20g per origin.
+- grams <= maxGrams for each origin (stock).
+- Explanations must be logical, calm, and convincing. No hype.
 
-Optimization goals:
-- daily: maximize quality-to-price; avoid expensive origins unless they add clear value aligned with preferences.
-- premium: maximize cup quality; cost is secondary.
-- Always keep recipe coherent with preferences (method/strength/flavor_direction/acidity/time/milk).
+Explainability requirements:
+- For each origin: say exactly why it was chosen AND why that grams (what it changes in cup).
+- Show at least 1 counterfactual (what would change if we pushed one dial).
+- Include a respectful "Taste Persona" letter based ONLY on user's preferences (not guessing private traits).
 
-Tone rules:
-- Respectful, logical, organized, confident but not hype.
-- Explain cause -> effect.
+Optimization:
+- daily: maximize quality-to-price (avoid expensive beans unless they add necessary structure).
+- premium: maximize cup quality (cost secondary).
 `;
+
+    // JSON schema (Structured Outputs) for much higher reliability
+    const outputSchema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["blend_name_suggestion", "recipe", "optimality_proof", "taste_persona_letter"],
+      properties: {
+        blend_name_suggestion: { type: "string" },
+        recipe: {
+          type: "array",
+          minItems: 2,
+          maxItems: 5,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["origin_code", "grams", "explain"],
+            properties: {
+              origin_code: { type: "string" },
+              grams: { type: "integer" },
+              explain: {
+                type: "object",
+                additionalProperties: false,
+                required: [
+                  "role_in_structure",
+                  "why_this_origin",
+                  "why_this_grams",
+                  "difference_vs_alternatives",
+                  "honesty_clause",
+                ],
+                properties: {
+                  role_in_structure: { type: "string" },
+                  why_this_origin: {
+                    type: "array",
+                    minItems: 2,
+                    maxItems: 6,
+                    items: { type: "string" },
+                  },
+                  why_this_grams: {
+                    type: "array",
+                    minItems: 2,
+                    maxItems: 6,
+                    items: { type: "string" },
+                  },
+                  difference_vs_alternatives: {
+                    type: "array",
+                    minItems: 0,
+                    maxItems: 3,
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["alternative_origin_code", "why_not", "what_you_gain_by_current_choice"],
+                      properties: {
+                        alternative_origin_code: { type: "string" },
+                        why_not: { type: "string" },
+                        what_you_gain_by_current_choice: { type: "string" },
+                      },
+                    },
+                  },
+                  honesty_clause: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        optimality_proof: {
+          type: "object",
+          additionalProperties: false,
+          required: ["objective", "constraints_checklist", "score_logic", "counterfactuals", "stock_respect_notes"],
+          properties: {
+            objective: { type: "string" },
+            constraints_checklist: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 8 },
+            score_logic: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 8 },
+            counterfactuals: {
+              type: "array",
+              minItems: 1,
+              maxItems: 3,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["change", "what_would_change_in_recipe", "why_current_is_optimum_for_given_prefs"],
+                properties: {
+                  change: { type: "string" },
+                  what_would_change_in_recipe: { type: "string" },
+                  why_current_is_optimum_for_given_prefs: { type: "string" },
+                },
+              },
+            },
+            stock_respect_notes: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+          },
+        },
+        taste_persona_letter: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title", "opening", "traits", "why_this_blend_matches_you", "how_to_brew_best", "closing"],
+          properties: {
+            title: { type: "string" },
+            opening: { type: "string" },
+            traits: {
+              type: "array",
+              minItems: 2,
+              maxItems: 5,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["label", "evidence"],
+                properties: {
+                  label: { type: "string" },
+                  evidence: { type: "string" },
+                },
+              },
+            },
+            why_this_blend_matches_you: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 6 },
+            how_to_brew_best: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 6 },
+            closing: { type: "string" },
+          },
+        },
+      },
+    };
 
     const userPayload = {
       size_g,
       line,
       preferences,
+      target_profile: targetProfile,
       available_origins: availableOriginsForModel,
       constraints_hint: {
         min_per_origin_g: 20,
@@ -445,12 +665,7 @@ Tone rules:
       },
     };
 
-    // ====== Higher accuracy strategy ======
-    // 1) generate candidate
-    // 2) validate strictly
-    // 3) (optional) second-pass critique step: ask model to self-check constraints + improve explanations
-    const MAX_ATTEMPTS = 6;
-
+    const MAX_ATTEMPTS = 5;
     let best = null;
     let lastError = null;
 
@@ -458,15 +673,23 @@ Tone rules:
       const system =
         systemBase +
         (lastError
-          ? `\nPrevious attempt failed validation with error: ${lastError}\nReturn a corrected JSON that passes HARD RULES.`
+          ? `\nPrevious attempt failed validation with error: ${lastError}\nReturn corrected JSON that passes ALL constraints.`
           : "");
 
       const gen = await openai.responses.create({
-        model: "gpt-5.2",
+        model: OPENAI_MODEL,
+        temperature: OPENAI_TEMPERATURE,
         input: [
           { role: "system", content: system },
           { role: "user", content: JSON.stringify(userPayload) },
         ],
+        text: {
+          format: {
+            type: "json_schema",
+            strict: true,
+            schema: outputSchema,
+          },
+        },
       });
 
       const rawText = (gen.output_text || "").trim();
@@ -480,70 +703,19 @@ Tone rules:
 
         validateStrict(recipe, size_g, originMap);
 
-        // ✅ Second pass: tighten reasoning, keep recipe same
-        // We freeze recipe grams/origins and ask for stronger explanations (no changing recipe)
-        const frozenRecipe = recipe.map((r) => ({
+        const strictRecipe = recipe.map((r) => ({
           origin_code: r.origin_code,
           grams: r.grams,
         }));
 
-        const critiqueSystem = `
-You are a strict editor.
-You MUST NOT change the recipe grams or origin_code list.
-Improve ONLY the explanations to be more logical, structured, and persuasive.
-Remain truthful and bound to available origins data. Return STRICT JSON with the SAME schema and SAME recipe values.
-`;
-
-        const critiquePayload = {
-          ...userPayload,
-          frozen_recipe: frozenRecipe,
-          draft: raw,
-          rule: "Do not change recipe.* Only explanations.",
-        };
-
-        const crit = await openai.responses.create({
-          model: "gpt-5.2",
-          input: [
-            { role: "system", content: critiqueSystem },
-            { role: "user", content: JSON.stringify(critiquePayload) },
-          ],
-        });
-
-        const critText = (crit.output_text || "").trim();
-        let final = raw;
-
-        try {
-          const improved = JSON.parse(critText);
-
-          // enforce "no recipe change"
-          const improvedRecipe = improved?.recipe || [];
-          const same =
-            Array.isArray(improvedRecipe) &&
-            improvedRecipe.length === frozenRecipe.length &&
-            improvedRecipe.every((x, i) => {
-              return (
-                x?.origin_code === frozenRecipe[i]?.origin_code &&
-                x?.grams === frozenRecipe[i]?.grams
-              );
-            });
-
-          if (same) final = improved;
-        } catch {
-          // ignore critique parse errors
-        }
-
-        // Build strict recipe for pricing
-        const strictRecipe = frozenRecipe.map((x) => ({
-          origin_code: x.origin_code,
-          grams: x.grams,
-        }));
-
         const pricing = priceBlend(strictRecipe, originMap);
 
-        // normalize output for frontend
+        const blendProfile = computeBlendProfile(strictRecipe, originMap);
+        const chart = buildChartPayload(blendProfile, targetProfile);
+
         const outRecipe = strictRecipe.map((rr) => {
           const o = originMap.get(rr.origin_code);
-          const found = (final.recipe || []).find((x) => x?.origin_code === rr.origin_code);
+          const found = (raw.recipe || []).find((x) => x?.origin_code === rr.origin_code);
           return {
             origin_code: rr.origin_code,
             origin_name: o?.name || rr.origin_code,
@@ -553,17 +725,23 @@ Remain truthful and bound to available origins data. Return STRICT JSON with the
         });
 
         return res.json({
-          blend_name_suggestion: final.blend_name_suggestion || "APEX Custom Blend",
+          blend_name_suggestion: raw.blend_name_suggestion || "APEX Custom Blend",
           recipe: outRecipe,
-          optimality_proof: final.optimality_proof || null,
-          taste_persona_letter: final.taste_persona_letter || null,
+          optimality_proof: raw.optimality_proof || null,
+          taste_persona_letter: raw.taste_persona_letter || null,
+
+          // ✅ chart payload for frontend (radar/spider chart)
+          target_profile: targetProfile,
+          blend_profile: blendProfile,
+          chart,
+
           price: pricing.total,
           pricing,
           meta: {
             attempts: attempt,
             usedAutofix: false,
             stockSource: "db",
-            model: "gpt-5.2",
+            model: OPENAI_MODEL,
           },
         });
       } catch (e) {
@@ -580,31 +758,35 @@ Remain truthful and bound to available origins data. Return STRICT JSON with the
 
     const pricing = priceBlend(fixedRecipe, originMap);
 
-    // provide honest fallback explanations
-    const fallback = {
+    const blendProfile = computeBlendProfile(fixedRecipe, originMap);
+    const chart = buildChartPayload(blendProfile, targetProfile);
+
+    const fallbackRecipe = fixedRecipe.map((rr) => {
+      const o = originMap.get(rr.origin_code);
+      return {
+        origin_code: rr.origin_code,
+        origin_name: o?.name || rr.origin_code,
+        grams: rr.grams,
+        explain: {
+          role_in_structure: "Balance (Fallback)",
+          why_this_origin: [
+            "Chosen from currently available stock; fallback mode focuses on correctness over nuanced optimization.",
+            "Profile alignment uses only provided notes and sensory numbers."
+          ],
+          why_this_grams: [
+            `Normalized to exactly ${size_g}g while keeping each component meaningful (>= 20g) and within stock.`,
+            "Adjusting any component by ±20g will shift balance, but constraints must remain satisfied."
+          ],
+          difference_vs_alternatives: [],
+          honesty_clause:
+            "Fallback explanation stays conservative: no invented tasting claims, only data-bound reasoning.",
+        },
+      };
+    });
+
+    return res.json({
       blend_name_suggestion: safeStr(best.raw?.blend_name_suggestion, "APEX Custom Blend"),
-      recipe: fixedRecipe.map((rr) => {
-        const o = originMap.get(rr.origin_code);
-        return {
-          origin_code: rr.origin_code,
-          origin_name: o?.name || rr.origin_code,
-          grams: rr.grams,
-          explain: {
-            role_in_structure: "Balance",
-            why_this_origin: [
-              "Selected from currently available stock and compatible profile fields (notes/body/acidity).",
-              "Autofix mode prioritizes strict rule correctness when AI output fails validation."
-            ],
-            why_this_grams: [
-              `Normalized to hit exactly ${size_g}g while keeping each component meaningful (>= 20g) and within stock limits.`,
-              "If you adjust any component by ±20g, the balance shifts but the strict constraints still must be respected."
-            ],
-            difference_vs_alternatives: [],
-            honesty_clause:
-              "This explanation is conservative: it avoids claims beyond the provided data and focuses on constraints compliance."
-          },
-        };
-      }),
+      recipe: fallbackRecipe,
       optimality_proof: {
         objective: line,
         constraints_checklist: [
@@ -614,40 +796,43 @@ Remain truthful and bound to available origins data. Return STRICT JSON with the
           "No duplicate origins",
         ],
         score_logic: [
-          "Fallback mode used because the AI draft did not pass strict validation after multiple attempts.",
-          "This output is guaranteed constraint-correct; taste optimization is limited under autofix.",
+          "Fallback used because AI output did not pass strict validation after multiple attempts.",
+          "This result is constraint-correct; taste optimization is limited in autofix.",
         ],
-        counterfactuals: [],
-        stock_respect_notes: [
-          "All grams are within available stock for each origin.",
+        counterfactuals: [
+          {
+            change: "If we push one dial (e.g., more fruitiness)",
+            what_would_change_in_recipe: "We would shift grams toward higher-fruitiness origins if stock allows.",
+            why_current_is_optimum_for_given_prefs:
+              "Current output prioritizes strict correctness under failure conditions.",
+          },
         ],
+        stock_respect_notes: ["All grams are within available stock for each origin."],
       },
       taste_persona_letter: {
         title: "Your Coffee Persona",
         opening:
-          "Based on your selected preferences, this blend was built to respect your choices and the available stock, with strict rule correctness.",
+          "Based on your selected preferences, this blend was built to respect your choices and the available stock with strict correctness.",
         traits: [
-          { label: "Taste compass", evidence: "Derived from your flavor_direction/acidity/milk choices." },
-          { label: "Ritual style", evidence: "Derived from your brew method + time." },
-          { label: "Power dial", evidence: "Derived from your strength selection." },
+          { label: "Taste compass", evidence: "Derived only from your flavor_direction/acidity/milk selections." },
+          { label: "Ritual style", evidence: "Derived only from your brew method + timing selections." },
+          { label: "Power dial", evidence: "Derived only from your strength selection." },
         ],
         why_this_blend_matches_you: [
-          "It stays inside your selected flavor direction without inventing notes.",
-          "It preserves balance by enforcing minimum meaningful contributions per origin.",
-          "It respects stock so what you order can actually be produced."
+          "It stays inside your chosen direction without inventing notes.",
+          "It preserves balance by enforcing meaningful minimum contributions per origin.",
+          "It respects stock so the blend is actually producible.",
         ],
         how_to_brew_best: [
-          "Use your chosen method; keep grind/ratio consistent. If drinking with milk, lean slightly stronger extraction."
+          "Keep ratio consistent. If you use milk, extract slightly stronger or tighten brew ratio for clarity.",
         ],
-        closing: "If you tweak preferences, we can re-optimize with a different structure."
-      }
-    };
+        closing: "If you tweak your preferences, we can re-optimize with a different structure.",
+      },
 
-    return res.json({
-      blend_name_suggestion: fallback.blend_name_suggestion,
-      recipe: fallback.recipe,
-      optimality_proof: fallback.optimality_proof,
-      taste_persona_letter: fallback.taste_persona_letter,
+      target_profile: targetProfile,
+      blend_profile: blendProfile,
+      chart,
+
       price: pricing.total,
       pricing,
       meta: {
@@ -656,7 +841,7 @@ Remain truthful and bound to available origins data. Return STRICT JSON with the
         bestAttempt: best.attempt,
         bestScore: best.score,
         stockSource: "db",
-        model: "gpt-5.2",
+        model: OPENAI_MODEL,
       },
     });
   } catch (e) {
@@ -667,7 +852,7 @@ Remain truthful and bound to available origins data. Return STRICT JSON with the
 // ================== Admin APIs ==================
 /**
  * GET /api/admin/orders?limit=200
- * بيرجع orders + items + location + snapshots (كامل)
+ * بيرجع orders + items + location + snapshots
  */
 app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   try {
