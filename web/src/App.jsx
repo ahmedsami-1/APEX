@@ -843,7 +843,7 @@ function GoogleMapsPicker({ value, onChange }) {
 
 /**
  * صفحة callback بسيطة (بدون Router) عشان OAuth
- * Supabase هيرجعك على: /#/auth/callback
+ * Supabase هيرجعك على: /auth/callback (path) أو /#/auth/callback (hash)
  */
 function AuthCallbackInline() {
   const [msg, setMsg] = useState("Signing you in…");
@@ -1065,7 +1065,7 @@ function MainApp() {
   const [step, setStep] = useState(1); // 1 prefs, 2 review, 3 checkout, 4 done
   const [isCompact, setIsCompact] = useState(false);
 
-  // Admin
+  // Admin (orders)
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminOrders, setAdminOrders] = useState([]);
   const [adminLoading, setAdminLoading] = useState(false);
@@ -1074,6 +1074,27 @@ function MainApp() {
   const [adminStatusFilter, setAdminStatusFilter] = useState("all");
   const [adminSelected, setAdminSelected] = useState(null);
   const [adminUpdatingId, setAdminUpdatingId] = useState(null);
+
+  // ✅ Admin (stock/origins)
+  const [adminOrigins, setAdminOrigins] = useState([]);
+  const [adminOriginsLoading, setAdminOriginsLoading] = useState(false);
+  const [adminOriginsErr, setAdminOriginsErr] = useState("");
+
+  const [newOrigin, setNewOrigin] = useState({
+    code: "",
+    name: "",
+    stock_g: 0,
+    cost_per_g: 0,
+    notesCsv: "",
+    acidity: 5,
+    body: 5,
+    sweetness: 5,
+    bitterness: 5,
+    aroma: 5,
+    fruitiness: 5,
+    chocolate: 5,
+    nutty: 5,
+  });
 
   const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "")
     .split(",")
@@ -1256,6 +1277,139 @@ function MainApp() {
     adminOpen,
   ]);
 
+  async function getAccessToken() {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) console.log("getSession error:", error);
+
+    const token = data?.session?.access_token || null;
+    return token;
+  }
+
+  // =========================
+  // ✅ Admin Stock APIs
+  // =========================
+  async function adminLoadOrigins() {
+    setAdminOriginsErr("");
+    setAdminOriginsLoading(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not logged in");
+
+      const res = await fetch(apiUrl("/api/admin/origins?include_inactive=1"), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load origins");
+      setAdminOrigins(data.origins || []);
+    } catch (e) {
+      setAdminOriginsErr(String(e?.message || e));
+    } finally {
+      setAdminOriginsLoading(false);
+    }
+  }
+
+  async function adminUpdateOrigin(code, patch) {
+    try {
+      const token = await getAccessToken();
+      const res = await fetch(
+        apiUrl(`/api/admin/origins/${encodeURIComponent(code)}`),
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(patch),
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Update failed");
+
+      setAdminOrigins((prev) =>
+        prev.map((o) => (o.code === code ? data.origin : o))
+      );
+    } catch (e) {
+      alert(String(e?.message || e));
+    }
+  }
+
+  async function adminAddOrigin() {
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not logged in");
+
+      const notes = String(newOrigin.notesCsv || "")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+
+      const payload = {
+        ...newOrigin,
+        code: newOrigin.code.trim(),
+        name: newOrigin.name.trim() || newOrigin.code.trim(),
+        stock_g: parseInt(newOrigin.stock_g || 0, 10),
+        cost_per_g: Number(newOrigin.cost_per_g || 0),
+        notes,
+      };
+      delete payload.notesCsv;
+
+      const res = await fetch(apiUrl("/api/admin/origins"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Insert failed");
+
+      setAdminOrigins((prev) => [data.origin, ...prev]);
+      setNewOrigin((p) => ({
+        ...p,
+        code: "",
+        name: "",
+        stock_g: 0,
+        cost_per_g: 0,
+        notesCsv: "",
+      }));
+    } catch (e) {
+      alert(String(e?.message || e));
+    }
+  }
+
+  async function adminDeactivateOrigin(code) {
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not logged in");
+
+      const res = await fetch(
+        apiUrl(`/api/admin/origins/${encodeURIComponent(code)}`),
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Delete failed");
+
+      setAdminOrigins((prev) =>
+        prev.map((o) =>
+          o.code === code ? { ...o, is_active: false, stock_g: 0 } : o
+        )
+      );
+    } catch (e) {
+      alert(String(e?.message || e));
+    }
+  }
+
+  // =========================
+  // Blend
+  // =========================
   async function fetchBlend() {
     setBlendErr("");
     setSaveMsg("");
@@ -1349,8 +1503,6 @@ function MainApp() {
         recipe: blend.recipe,
         price: Number(blend.price || 0),
         pricing: blend.pricing ?? null,
-        // ✅ keep chart if you want (optional, if column exists)
-        // chart: blend.chart ?? null,
       };
 
       const { error } = await supabase.from("saved_blends").insert([row]);
@@ -1402,7 +1554,6 @@ function MainApp() {
       size_g: Number(b.size_g || 250),
       price: Number(b.price || 0),
       recipe: Array.isArray(b.recipe) ? b.recipe : [],
-      // chart: b.chart ?? null, // لو مخزنها
     };
 
     setCart((prev) => [item, ...prev]);
@@ -1529,7 +1680,7 @@ function MainApp() {
           pricing: it.pricing ?? null,
           why: it.why ?? null,
           notes: it.notes ?? null,
-          chart: it.chart ?? null, // ✅ optionally store
+          chart: it.chart ?? null,
         },
       }));
 
@@ -1605,17 +1756,6 @@ function MainApp() {
     }
   }
 
-  async function getAccessToken() {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) console.log("getSession error:", error);
-
-    const token = data?.session?.access_token || null;
-    console.log("ADMIN token exists?", !!token);
-    if (token) console.log("ADMIN token prefix:", token.slice(0, 20));
-
-    return token;
-  }
-
   async function adminLoadOrders() {
     setAdminErr("");
     setAdminLoading(true);
@@ -1624,13 +1764,9 @@ function MainApp() {
       const token = await getAccessToken();
       if (!token) throw new Error("Not logged in (no access_token)");
 
-      console.log("ADMIN sending Authorization header…");
-
       const res = await fetch(apiUrl("/api/admin/orders?limit=200"), {
         method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       const ct = res.headers.get("content-type") || "";
@@ -1646,7 +1782,6 @@ function MainApp() {
 
       setAdminOrders(body.orders || []);
     } catch (e) {
-      console.log("ADMIN ERROR:", e);
       setAdminErr(String(e?.message || e));
     } finally {
       setAdminLoading(false);
@@ -1752,6 +1887,7 @@ function MainApp() {
               }
               setAdminOpen(true);
               adminLoadOrders();
+              adminLoadOrigins(); // ✅ load stock too
             }}
             title={isAdmin ? "Admin panel" : "Admins only"}
           >
@@ -1877,7 +2013,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.method}
-                onChange={(e) => setPrefs((p) => ({ ...p, method: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, method: e.target.value }))
+                }
               >
                 {METHOD_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1892,7 +2030,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.strength}
-                onChange={(e) => setPrefs((p) => ({ ...p, strength: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, strength: e.target.value }))
+                }
               >
                 {STRENGTH_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1924,7 +2064,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.acidity}
-                onChange={(e) => setPrefs((p) => ({ ...p, acidity: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, acidity: e.target.value }))
+                }
               >
                 {ACIDITY_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1939,7 +2081,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.time}
-                onChange={(e) => setPrefs((p) => ({ ...p, time: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, time: e.target.value }))
+                }
               >
                 {TIME_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1954,7 +2098,9 @@ function MainApp() {
               <select
                 className="apexSelect"
                 value={prefs.milk}
-                onChange={(e) => setPrefs((p) => ({ ...p, milk: e.target.value }))}
+                onChange={(e) =>
+                  setPrefs((p) => ({ ...p, milk: e.target.value }))
+                }
               >
                 {MILK_OPTIONS.map((o) => (
                   <option key={o.v} value={o.v}>
@@ -1973,7 +2119,9 @@ function MainApp() {
             <div className="apexResult">
               <div className="apexResultTop">
                 <div>
-                  <div className="apexBlendName">{safeText(blend.blend_name_suggestion)}</div>
+                  <div className="apexBlendName">
+                    {safeText(blend.blend_name_suggestion)}
+                  </div>
                   <div className="apexBlendWhy">{safeText(blend.why)}</div>
                 </div>
 
@@ -1989,8 +2137,12 @@ function MainApp() {
                 {blend.recipe.map((r, idx) => (
                   <div className="apexRecipeRow" key={`${r.origin_code}-${idx}`}>
                     <div className="apexRecipeOrigin">
-                      <div className="apexRecipeName">{safeText(r.origin_name)}</div>
-                      <div className="apexRecipeCode">{safeText(r.origin_code)}</div>
+                      <div className="apexRecipeName">
+                        {safeText(r.origin_name)}
+                      </div>
+                      <div className="apexRecipeCode">
+                        {safeText(r.origin_code)}
+                      </div>
                     </div>
                     <div className="apexRecipeGrams">{Number(r.grams)}g</div>
                   </div>
@@ -2036,7 +2188,8 @@ function MainApp() {
           <div className="apexCardHead">
             <div>
               <div className="apexCardTitle">
-                Cart & Checkout <span className="apexCountBadge">{cart.length}</span>
+                Cart & Checkout{" "}
+                <span className="apexCountBadge">{cart.length}</span>
               </div>
               <div className="apexCardSub">Cash on delivery MVP</div>
             </div>
@@ -2126,7 +2279,8 @@ function MainApp() {
             </div>
 
             <div className="apexCartTitle" style={{ marginTop: 14 }}>
-              Delivery location (Google Maps) <span style={{ opacity: 0.8 }}>(required)</span>
+              Delivery location (Google Maps){" "}
+              <span style={{ opacity: 0.8 }}>(required)</span>
             </div>
 
             <GoogleMapsPicker value={location} onChange={setLocation} />
@@ -2172,7 +2326,8 @@ function MainApp() {
                 <div className="apexSavedCard" key={b.id}>
                   <div className="apexSavedName">{safeText(b.blend_name)}</div>
                   <div className="apexSavedMeta">
-                    {safeText(b.line).toUpperCase()} • {Number(b.size_g)}g • {Number(b.price)} EGP
+                    {safeText(b.line).toUpperCase()} • {Number(b.size_g)}g •{" "}
+                    {Number(b.price)} EGP
                   </div>
                   <div className="apexSavedWhen">
                     {b.created_at ? new Date(b.created_at).toLocaleString() : ""}
@@ -2238,7 +2393,8 @@ function MainApp() {
                     </span>
 
                     <div className="apexTinyNote" style={{ opacity: 0.85 }}>
-                      {safeText(o.payment)} • {Number(o.total)} {safeText(o.currency || "EGP")}
+                      {safeText(o.payment)} • {Number(o.total)}{" "}
+                      {safeText(o.currency || "EGP")}
                     </div>
                   </div>
 
@@ -2267,7 +2423,8 @@ function MainApp() {
                       <>
                         <b>Location:</b> {safeText(o.location_address || "Pinned")} <br />
                         <span style={{ opacity: 0.8 }}>
-                          lat: {Number(o.location_lat).toFixed(6)} | lng: {Number(o.location_lng).toFixed(6)}
+                          lat: {Number(o.location_lat).toFixed(6)} | lng:{" "}
+                          {Number(o.location_lng).toFixed(6)}
                         </span>
                         <br />
                         {o.location_maps_url ? (
@@ -2300,7 +2457,8 @@ function MainApp() {
                               <div className="apexTinyNote" style={{ marginTop: 6 }}>
                                 {it.recipe.map((r, idx) => (
                                   <div key={idx}>
-                                    {safeText(r.origin_name || r.origin_code)}: {Number(r.grams)}g
+                                    {safeText(r.origin_name || r.origin_code)}:{" "}
+                                    {Number(r.grams)}g
                                   </div>
                                 ))}
                               </div>
@@ -2343,7 +2501,7 @@ function MainApp() {
             style={{ width: "min(980px, 100%)" }}
           >
             <div className="apexModalTop">
-              <div className="apexModalTitle">Admin Orders</div>
+              <div className="apexModalTitle">Admin Panel</div>
               <button className="apexModalClose" type="button" onClick={() => setAdminOpen(false)}>
                 ✕
               </button>
@@ -2352,6 +2510,7 @@ function MainApp() {
             {!isAdmin ? <div className="apexError">Admin only.</div> : null}
             {adminErr ? <div className="apexError">{adminErr}</div> : null}
 
+            {/* ===== Admin Orders ===== */}
             <div style={{ display: "grid", gap: 10 }}>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
                 <input
@@ -2382,7 +2541,16 @@ function MainApp() {
                   onClick={adminLoadOrders}
                   disabled={!isAdmin}
                 >
-                  {adminLoading ? "Loading..." : "Refresh"}
+                  {adminLoading ? "Loading..." : "Refresh Orders"}
+                </button>
+
+                <button
+                  className="apexPillBtn apexPillBtnGold"
+                  type="button"
+                  onClick={adminLoadOrigins}
+                  disabled={!isAdmin}
+                >
+                  {adminOriginsLoading ? "Loading..." : "Refresh Stock"}
                 </button>
               </div>
 
@@ -2448,6 +2616,205 @@ function MainApp() {
               </div>
             </div>
 
+            {/* ===== Stock Manager ===== */}
+            <div className="apexCardDivider" style={{ margin: "14px 0" }} />
+
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 950 }}>Stock Manager</div>
+              <div className="apexTinyNote" style={{ opacity: 0.85 }}>
+                Edit stock / cost, enable/disable, and add new origins.
+              </div>
+            </div>
+
+            {adminOriginsErr ? <div className="apexError">{adminOriginsErr}</div> : null}
+
+            {/* Add new origin */}
+            <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+              <div style={{ fontWeight: 900, opacity: 0.9 }}>Add new origin</div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <input
+                  className="apexInput"
+                  placeholder="code e.g. ET_SIDAMO"
+                  value={newOrigin.code}
+                  onChange={(e) => setNewOrigin((p) => ({ ...p, code: e.target.value }))}
+                  disabled={!isAdmin}
+                />
+                <input
+                  className="apexInput"
+                  placeholder="name"
+                  value={newOrigin.name}
+                  onChange={(e) => setNewOrigin((p) => ({ ...p, name: e.target.value }))}
+                  disabled={!isAdmin}
+                />
+                <input
+                  className="apexInput"
+                  type="number"
+                  placeholder="stock_g"
+                  value={Number(newOrigin.stock_g || 0)}
+                  onChange={(e) =>
+                    setNewOrigin((p) => ({
+                      ...p,
+                      stock_g: parseInt(e.target.value || "0", 10),
+                    }))
+                  }
+                  disabled={!isAdmin}
+                />
+                <input
+                  className="apexInput"
+                  type="number"
+                  step="0.01"
+                  placeholder="cost_per_g"
+                  value={Number(newOrigin.cost_per_g || 0)}
+                  onChange={(e) =>
+                    setNewOrigin((p) => ({
+                      ...p,
+                      cost_per_g: Number(e.target.value || "0"),
+                    }))
+                  }
+                  disabled={!isAdmin}
+                />
+              </div>
+
+              <input
+                className="apexInput"
+                placeholder='notes csv: "chocolate,nuts"'
+                value={newOrigin.notesCsv}
+                onChange={(e) => setNewOrigin((p) => ({ ...p, notesCsv: e.target.value }))}
+                disabled={!isAdmin}
+              />
+
+              <div className="apexTinyNote" style={{ opacity: 0.85 }}>
+                Sensory (1..10): acidity/body/sweetness/bitterness/aroma/fruitiness/chocolate/nutty
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+                {["acidity","body","sweetness","bitterness","aroma","fruitiness","chocolate","nutty"].map((k) => (
+                  <input
+                    key={k}
+                    className="apexInput"
+                    type="number"
+                    min="1"
+                    max="10"
+                    step="1"
+                    placeholder={k}
+                    value={Number(newOrigin[k] ?? 5)}
+                    onChange={(e) =>
+                      setNewOrigin((p) => ({ ...p, [k]: parseInt(e.target.value || "5", 10) }))
+                    }
+                    disabled={!isAdmin}
+                  />
+                ))}
+              </div>
+
+              <button className="apexBtnGold" type="button" onClick={adminAddOrigin} disabled={!isAdmin}>
+                Add Origin
+              </button>
+            </div>
+
+            {/* List origins */}
+            <div style={{ marginTop: 14, display: "grid", gap: 10 }}>
+              {adminOrigins.length === 0 ? (
+                <div className="apexSavedEmpty">
+                  {adminOriginsLoading ? "Loading stock…" : "No origins loaded yet. Tap Refresh Stock."}
+                </div>
+              ) : null}
+
+              {adminOrigins.map((o) => (
+                <div
+                  key={o.code}
+                  className="apexRecipeRow"
+                  style={{ alignItems: "center" }}
+                >
+                  <div style={{ flex: "1 1 auto" }}>
+                    <div style={{ fontWeight: 950 }}>
+                      {o.name}{" "}
+                      <span style={{ opacity: 0.7, fontWeight: 800 }}>
+                        ({o.code})
+                      </span>
+                    </div>
+                    <div className="apexTinyNote">
+                      Active: <b>{o.is_active ? "YES" : "NO"}</b> • Notes:{" "}
+                      {Array.isArray(o.notes) ? o.notes.join(", ") : ""}
+                    </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 8,
+                      alignItems: "center",
+                      flexWrap: "wrap",
+                      justifyContent: "flex-end",
+                    }}
+                  >
+                    <input
+                      className="apexInput"
+                      style={{ width: 120 }}
+                      type="number"
+                      value={Number(o.stock_g || 0)}
+                      onChange={(e) =>
+                        setAdminOrigins((prev) =>
+                          prev.map((x) =>
+                            x.code === o.code
+                              ? { ...x, stock_g: parseInt(e.target.value || "0", 10) }
+                              : x
+                          )
+                        )
+                      }
+                      onBlur={() =>
+                        adminUpdateOrigin(o.code, { stock_g: Number(o.stock_g || 0) })
+                      }
+                      title="stock_g"
+                      disabled={!isAdmin}
+                    />
+
+                    <input
+                      className="apexInput"
+                      style={{ width: 120 }}
+                      type="number"
+                      step="0.01"
+                      value={Number(o.cost_per_g || 0)}
+                      onChange={(e) =>
+                        setAdminOrigins((prev) =>
+                          prev.map((x) =>
+                            x.code === o.code
+                              ? { ...x, cost_per_g: Number(e.target.value || "0") }
+                              : x
+                          )
+                        )
+                      }
+                      onBlur={() =>
+                        adminUpdateOrigin(o.code, { cost_per_g: Number(o.cost_per_g || 0) })
+                      }
+                      title="cost_per_g"
+                      disabled={!isAdmin}
+                    />
+
+                    <button
+                      className="apexPillBtn"
+                      type="button"
+                      onClick={() => adminUpdateOrigin(o.code, { is_active: !o.is_active })}
+                      disabled={!isAdmin}
+                    >
+                      {o.is_active ? "Disable" : "Enable"}
+                    </button>
+
+                    <button
+                      className="apexPillBtn"
+                      type="button"
+                      onClick={() => adminDeactivateOrigin(o.code)}
+                      disabled={!isAdmin}
+                      title="Soft delete (is_active=false, stock=0)"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* ===== Order details modal ===== */}
             {adminSelected ? (
               <div
                 className="apexModalOverlay"
@@ -2488,7 +2855,10 @@ function MainApp() {
                     </select>
 
                     <div className="apexTinyNote">
-                      Total: <b>{Number(adminSelected.total || 0)} {safeText(adminSelected.currency || "EGP")}</b>
+                      Total:{" "}
+                      <b>
+                        {Number(adminSelected.total || 0)} {safeText(adminSelected.currency || "EGP")}
+                      </b>
                     </div>
                   </div>
 
@@ -2504,7 +2874,8 @@ function MainApp() {
                       </>
                     ) : null}
                     <b>Payment:</b> {safeText(adminSelected.payment)} <br />
-                    <b>Created:</b> {adminSelected.created_at ? new Date(adminSelected.created_at).toLocaleString() : ""}{" "}
+                    <b>Created:</b>{" "}
+                    {adminSelected.created_at ? new Date(adminSelected.created_at).toLocaleString() : ""}
                     <br />
                     {adminSelected.updated_at ? (
                       <>
