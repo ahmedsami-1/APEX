@@ -31,17 +31,18 @@ const extraCors = (process.env.CORS_ORIGINS || "")
 
 const allowedOrigins = Array.from(new Set([...defaultCors, ...extraCors]));
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // non-browser / server-to-server
-      if (!origin) return cb(null, true);
-      if (allowedOrigins.includes(origin)) return cb(null, true);
-      return cb(new Error("Not allowed by CORS: " + origin));
-    },
-    credentials: true,
-  })
-);
+// ✅ safer cors: don't throw from callback
+const corsOptions = {
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // non-browser / server-to-server
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(null, false); // deny silently, handled by error middleware / browser
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -49,26 +50,27 @@ app.use(express.json({ limit: "1mb" }));
 if (!process.env.OPENAI_API_KEY) console.warn("⚠️ Missing OPENAI_API_KEY");
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Model via ENV (easy switch)
+// ✅ Must be exactly gpt-5.2 (you requested no other model)
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.2";
-const OPENAI_TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE ?? "0.2");
+if (OPENAI_MODEL !== "gpt-5.2") {
+  console.warn(
+    `⚠️ OPENAI_MODEL is "${OPENAI_MODEL}" but this server is locked to gpt-5.2.`
+  );
+}
 
-// Request timeout (ms)
-const OPENAI_TIMEOUT_MS = Math.max(
-  2000,
-  Number(process.env.OPENAI_TIMEOUT_MS ?? "20000")
-);
+const OPENAI_TEMPERATURE = Number(process.env.OPENAI_TEMPERATURE ?? "0.2");
 
 // ================== Supabase Admin (server-only) ==================
 if (!process.env.SUPABASE_URL) console.warn("⚠️ Missing SUPABASE_URL");
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY)
   console.warn("⚠️ Missing SUPABASE_SERVICE_ROLE_KEY");
 
-const supabaseAdmin = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } }
-);
+const supabaseAdmin =
+  process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false },
+      })
+    : null;
 
 // ================== Admin whitelist ==================
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
@@ -115,6 +117,8 @@ async function requireAdmin(req, res, next) {
  * acidity, body, sweetness, bitterness, aroma, fruitiness, chocolate, nutty
  */
 async function loadOriginsFromDB({ onlyAvailable = true } = {}) {
+  if (!supabaseAdmin) throw new Error("Supabase admin not configured");
+
   const sel = [
     "code",
     "name",
@@ -231,6 +235,14 @@ function safeJsonParse(s) {
   }
 }
 
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 // ================== Chart ==================
 const CHART_AXES = [
   { key: "body", label: "Body" },
@@ -312,7 +324,11 @@ function deriveTargetProfile(preferences) {
   if (strength.includes("strong") || strength.includes("high")) {
     t.body += 1;
     t.bitterness += 1;
-  } else if (strength.includes("light") || strength.includes("mild") || strength.includes("soft")) {
+  } else if (
+    strength.includes("light") ||
+    strength.includes("mild") ||
+    strength.includes("soft")
+  ) {
     t.body -= 1;
     t.bitterness -= 1;
     t.acidity += 1;
@@ -485,48 +501,157 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
   return fixed;
 }
 
-// ================== Health ==================
-app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
+// ================== Jobs (Async Recommend) ==================
+const WORKER_ID = process.env.WORKER_ID || `worker-${Math.random().toString(16).slice(2)}`;
+const WORKER_ENABLED = String(process.env.WORKER_ENABLED ?? "1") === "1";
+const WORKER_POLL_MS = Math.max(500, parseInt(process.env.WORKER_POLL_MS || "1500", 10));
+const WORKER_IDLE_SLEEP_MS = Math.max(200, parseInt(process.env.WORKER_IDLE_SLEEP_MS || "600", 10));
+const JOB_MAX_ATTEMPTS = Math.max(1, parseInt(process.env.JOB_MAX_ATTEMPTS || "2", 10));
 
-// ================== Recommend ==================
-app.post("/api/recommend", async (req, res) => {
-  try {
-    const { size_g, line, preferences } = req.body || {};
+async function createJob(type, payload) {
+  if (!supabaseAdmin) throw new Error("Supabase admin not configured");
 
-    if (!Number.isInteger(size_g) || size_g <= 0)
-      throw new Error("size_g must be positive int");
-    if (line !== "daily" && line !== "premium")
-      throw new Error("line must be daily|premium");
-    if (!preferences) throw new Error("preferences required");
-    if (!process.env.OPENAI_API_KEY)
-      throw new Error("Server missing OPENAI_API_KEY");
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .insert([
+      {
+        type,
+        status: "queued",
+        payload,
+        attempts: 0,
+        locked_at: null,
+        locked_by: null,
+      },
+    ])
+    .select("id, type, status, created_at")
+    .single();
 
-    const ORIGINS_DB = await loadOriginsFromDB({ onlyAvailable: true });
-    if (!ORIGINS_DB.length) {
-      return res.status(400).json({ error: "No stock available right now." });
-    }
+  if (error) throw new Error(error.message);
+  return data;
+}
 
-    const originMap = new Map(ORIGINS_DB.map((o) => [o.code, o]));
+async function readJob(id) {
+  if (!supabaseAdmin) throw new Error("Supabase admin not configured");
 
-    const availableOriginsForModel = ORIGINS_DB.map((o) => ({
-      code: o.code,
-      name: o.name,
-      maxGrams: o.maxGrams,
-      costPerG: o.costPerG,
-      notes: o.notes,
-      acidity: o.acidity,
-      body: o.body,
-      sweetness: o.sweetness,
-      bitterness: o.bitterness,
-      aroma: o.aroma,
-      fruitiness: o.fruitiness,
-      chocolate: o.chocolate,
-      nutty: o.nutty,
-    }));
+  const { data, error } = await supabaseAdmin
+    .from("jobs")
+    .select("id, type, status, payload, result, error, attempts, created_at, updated_at")
+    .eq("id", id)
+    .single();
 
-    const targetProfile = deriveTargetProfile(preferences);
+  if (error) throw new Error(error.message);
+  return data;
+}
 
-    const systemBase = `
+// Best-effort lock: select oldest queued job, then update if still queued.
+async function lockNextQueuedJob(type = "recommend") {
+  if (!supabaseAdmin) throw new Error("Supabase admin not configured");
+
+  const { data: queued, error: qErr } = await supabaseAdmin
+    .from("jobs")
+    .select("id")
+    .eq("status", "queued")
+    .eq("type", type)
+    .order("created_at", { ascending: true })
+    .limit(1);
+
+  if (qErr) throw new Error(qErr.message);
+
+  const job = queued?.[0];
+  if (!job) return null;
+
+  const { data: locked, error: lErr } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      status: "running",
+      locked_at: nowIso(),
+      locked_by: WORKER_ID,
+      updated_at: nowIso(),
+    })
+    .eq("id", job.id)
+    .eq("status", "queued")
+    .select("id, payload, attempts, type")
+    .single();
+
+  if (lErr) return null; // locked by someone else
+  return locked;
+}
+
+async function markJobSuccess(id, result) {
+  const { error } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      status: "succeeded",
+      result,
+      error: null,
+      updated_at: nowIso(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+async function markJobFailed(id, errMsg) {
+  const { error } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      status: "failed",
+      error: errMsg,
+      updated_at: nowIso(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+async function bumpAttempts(id, attempts) {
+  const { error } = await supabaseAdmin
+    .from("jobs")
+    .update({
+      attempts: (attempts || 0) + 1,
+      updated_at: nowIso(),
+    })
+    .eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// ================== Recommend core (same logic as before, returns JSON) ==================
+async function runRecommend(payload) {
+  // ✅ lock model
+  if (OPENAI_MODEL !== "gpt-5.2") {
+    throw new Error(
+      `Server locked to gpt-5.2. Current OPENAI_MODEL="${OPENAI_MODEL}" is not allowed.`
+    );
+  }
+
+  const { size_g, line, preferences } = payload || {};
+
+  if (!Number.isInteger(size_g) || size_g <= 0) throw new Error("size_g must be positive int");
+  if (line !== "daily" && line !== "premium") throw new Error("line must be daily|premium");
+  if (!preferences) throw new Error("preferences required");
+  if (!process.env.OPENAI_API_KEY) throw new Error("Server missing OPENAI_API_KEY");
+
+  const ORIGINS_DB = await loadOriginsFromDB({ onlyAvailable: true });
+  if (!ORIGINS_DB.length) throw new Error("No stock available right now.");
+
+  const originMap = new Map(ORIGINS_DB.map((o) => [o.code, o]));
+  const availableOriginsForModel = ORIGINS_DB.map((o) => ({
+    code: o.code,
+    name: o.name,
+    maxGrams: o.maxGrams,
+    costPerG: o.costPerG,
+    notes: o.notes,
+    acidity: o.acidity,
+    body: o.body,
+    sweetness: o.sweetness,
+    bitterness: o.bitterness,
+    aroma: o.aroma,
+    fruitiness: o.fruitiness,
+    chocolate: o.chocolate,
+    nutty: o.nutty,
+  }));
+
+  const targetProfile = deriveTargetProfile(preferences);
+
+  const systemBase = `
 You are APEX Blend Architect: a coffee formulator + a rational explainer.
 You MUST be truthful and strictly bound to provided available_origins (notes + sensory numbers).
 You MUST NOT invent flavors beyond each origin's notes array.
@@ -552,382 +677,432 @@ Optimization:
 - premium: maximize cup quality (cost secondary).
 `.trim();
 
-    // ✅ JSON Schema for strict output
-    const outputSchema = {
-      type: "object",
-      additionalProperties: false,
-      required: ["blend_name_suggestion", "recipe", "optimality_proof", "taste_persona_letter"],
-      properties: {
-        blend_name_suggestion: { type: "string" },
-        recipe: {
-          type: "array",
-          minItems: 2,
-          maxItems: 5,
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["origin_code", "grams", "explain"],
-            properties: {
-              origin_code: { type: "string" },
-              grams: { type: "integer" },
-              explain: {
-                type: "object",
-                additionalProperties: false,
-                required: [
-                  "role_in_structure",
-                  "why_this_origin",
-                  "why_this_grams",
-                  "difference_vs_alternatives",
-                  "honesty_clause",
-                ],
-                properties: {
-                  role_in_structure: { type: "string" },
-                  why_this_origin: {
-                    type: "array",
-                    minItems: 2,
-                    maxItems: 6,
-                    items: { type: "string" },
-                  },
-                  why_this_grams: {
-                    type: "array",
-                    minItems: 2,
-                    maxItems: 6,
-                    items: { type: "string" },
-                  },
-                  difference_vs_alternatives: {
-                    type: "array",
-                    minItems: 0,
-                    maxItems: 3,
-                    items: {
-                      type: "object",
-                      additionalProperties: false,
-                      required: [
-                        "alternative_origin_code",
-                        "why_not",
-                        "what_you_gain_by_current_choice",
-                      ],
-                      properties: {
-                        alternative_origin_code: { type: "string" },
-                        why_not: { type: "string" },
-                        what_you_gain_by_current_choice: { type: "string" },
-                      },
+  const outputSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: [
+      "blend_name_suggestion",
+      "recipe",
+      "optimality_proof",
+      "taste_persona_letter",
+    ],
+    properties: {
+      blend_name_suggestion: { type: "string" },
+      recipe: {
+        type: "array",
+        minItems: 2,
+        maxItems: 5,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["origin_code", "grams", "explain"],
+          properties: {
+            origin_code: { type: "string" },
+            grams: { type: "integer" },
+            explain: {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "role_in_structure",
+                "why_this_origin",
+                "why_this_grams",
+                "difference_vs_alternatives",
+                "honesty_clause",
+              ],
+              properties: {
+                role_in_structure: { type: "string" },
+                why_this_origin: {
+                  type: "array",
+                  minItems: 2,
+                  maxItems: 6,
+                  items: { type: "string" },
+                },
+                why_this_grams: {
+                  type: "array",
+                  minItems: 2,
+                  maxItems: 6,
+                  items: { type: "string" },
+                },
+                difference_vs_alternatives: {
+                  type: "array",
+                  minItems: 0,
+                  maxItems: 3,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: [
+                      "alternative_origin_code",
+                      "why_not",
+                      "what_you_gain_by_current_choice",
+                    ],
+                    properties: {
+                      alternative_origin_code: { type: "string" },
+                      why_not: { type: "string" },
+                      what_you_gain_by_current_choice: { type: "string" },
                     },
                   },
-                  honesty_clause: { type: "string" },
                 },
+                honesty_clause: { type: "string" },
               },
             },
-          },
-        },
-        optimality_proof: {
-          type: "object",
-          additionalProperties: false,
-          required: ["objective", "constraints_checklist", "score_logic", "counterfactuals", "stock_respect_notes"],
-          properties: {
-            objective: { type: "string" },
-            constraints_checklist: {
-              type: "array",
-              items: { type: "string" },
-              minItems: 3,
-              maxItems: 8,
-            },
-            score_logic: {
-              type: "array",
-              items: { type: "string" },
-              minItems: 2,
-              maxItems: 8,
-            },
-            counterfactuals: {
-              type: "array",
-              minItems: 1,
-              maxItems: 3,
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: [
-                  "change",
-                  "what_would_change_in_recipe",
-                  "why_current_is_optimum_for_given_prefs",
-                ],
-                properties: {
-                  change: { type: "string" },
-                  what_would_change_in_recipe: { type: "string" },
-                  why_current_is_optimum_for_given_prefs: { type: "string" },
-                },
-              },
-            },
-            stock_respect_notes: {
-              type: "array",
-              items: { type: "string" },
-              minItems: 1,
-              maxItems: 6,
-            },
-          },
-        },
-        taste_persona_letter: {
-          type: "object",
-          additionalProperties: false,
-          required: ["title", "opening", "traits", "why_this_blend_matches_you", "how_to_brew_best", "closing"],
-          properties: {
-            title: { type: "string" },
-            opening: { type: "string" },
-            traits: {
-              type: "array",
-              minItems: 2,
-              maxItems: 5,
-              items: {
-                type: "object",
-                additionalProperties: false,
-                required: ["label", "evidence"],
-                properties: {
-                  label: { type: "string" },
-                  evidence: { type: "string" },
-                },
-              },
-            },
-            why_this_blend_matches_you: {
-              type: "array",
-              items: { type: "string" },
-              minItems: 2,
-              maxItems: 6,
-            },
-            how_to_brew_best: {
-              type: "array",
-              items: { type: "string" },
-              minItems: 1,
-              maxItems: 6,
-            },
-            closing: { type: "string" },
           },
         },
       },
-    };
-
-    const userPayload = {
-      size_g,
-      line,
-      preferences,
-      target_profile: targetProfile,
-      available_origins: availableOriginsForModel,
-      constraints_hint: {
-        min_per_origin_g: 20,
-        max_origins: 5,
-        must_be_truthful: true,
-        show_counterfactuals: true,
+      optimality_proof: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "objective",
+          "constraints_checklist",
+          "score_logic",
+          "counterfactuals",
+          "stock_respect_notes",
+        ],
+        properties: {
+          objective: { type: "string" },
+          constraints_checklist: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 3,
+            maxItems: 8,
+          },
+          score_logic: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 2,
+            maxItems: 8,
+          },
+          counterfactuals: {
+            type: "array",
+            minItems: 1,
+            maxItems: 3,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "change",
+                "what_would_change_in_recipe",
+                "why_current_is_optimum_for_given_prefs",
+              ],
+              properties: {
+                change: { type: "string" },
+                what_would_change_in_recipe: { type: "string" },
+                why_current_is_optimum_for_given_prefs: { type: "string" },
+              },
+            },
+          },
+          stock_respect_notes: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 1,
+            maxItems: 6,
+          },
+        },
       },
-    };
+      taste_persona_letter: {
+        type: "object",
+        additionalProperties: false,
+        required: [
+          "title",
+          "opening",
+          "traits",
+          "why_this_blend_matches_you",
+          "how_to_brew_best",
+          "closing",
+        ],
+        properties: {
+          title: { type: "string" },
+          opening: { type: "string" },
+          traits: {
+            type: "array",
+            minItems: 2,
+            maxItems: 5,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              required: ["label", "evidence"],
+              properties: {
+                label: { type: "string" },
+                evidence: { type: "string" },
+              },
+            },
+          },
+          why_this_blend_matches_you: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 2,
+            maxItems: 6,
+          },
+          how_to_brew_best: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 1,
+            maxItems: 6,
+          },
+          closing: { type: "string" },
+        },
+      },
+    },
+  };
 
-    // ✅ IMPORTANT: OpenAI requires text.format.name (this fixes your 400)
-    const FORMAT_NAME = "apex_blend_v1";
+  const userPayload = {
+    size_g,
+    line,
+    preferences,
+    target_profile: targetProfile,
+    available_origins: availableOriginsForModel,
+    constraints_hint: {
+      min_per_origin_g: 20,
+      max_origins: 5,
+      must_be_truthful: true,
+      show_counterfactuals: true,
+    },
+  };
 
-    const MAX_ATTEMPTS = 5;
-    let best = null;
-    let lastError = null;
+  const FORMAT_NAME = "apex_blend_v1";
+  const MAX_ATTEMPTS = 5;
+  let best = null;
+  let lastError = null;
 
-    // For abort timeout
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), OPENAI_TIMEOUT_MS);
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const system =
+      systemBase +
+      (lastError
+        ? `\n\nPrevious attempt failed validation with error: ${lastError}\nReturn corrected JSON that passes ALL constraints.`
+        : "");
+
+    const gen = await openai.responses.create({
+      model: OPENAI_MODEL,
+      temperature: OPENAI_TEMPERATURE,
+      max_output_tokens: Math.max(
+        1200,
+        parseInt(process.env.OPENAI_MAX_OUTPUT_TOKENS || "1800", 10)
+      ),
+      input: [
+        { role: "system", content: [{ type: "input_text", text: system }] },
+        { role: "user", content: [{ type: "input_text", text: JSON.stringify(userPayload) }] },
+      ],
+      text: {
+        format: {
+          name: FORMAT_NAME,
+          type: "json_schema",
+          strict: true,
+          schema: outputSchema,
+        },
+      },
+    });
+
+    const rawText = (gen.output_text || "").trim();
+    const raw = safeJsonParse(rawText);
 
     try {
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-        const system =
-          systemBase +
-          (lastError
-            ? `\n\nPrevious attempt failed validation with error: ${lastError}\nReturn corrected JSON that passes ALL constraints.`
-            : "");
+      if (!raw) throw new Error("Model returned non-JSON text");
 
-        const gen = await openai.responses.create(
-          {
-            model: OPENAI_MODEL,
-            temperature: OPENAI_TEMPERATURE,
-            input: [
-              {
-                role: "system",
-                content: [{ type: "input_text", text: system }],
-              },
-              {
-                role: "user",
-                content: [{ type: "input_text", text: JSON.stringify(userPayload) }],
-              },
-            ],
-            text: {
-              format: {
-                // ✅ required name
-                name: FORMAT_NAME,
-                type: "json_schema",
-                strict: true,
-                schema: outputSchema,
-              },
-            },
-          },
-          { signal: controller.signal }
-        );
+      const recipe = raw?.recipe;
 
-        const rawText = (gen.output_text || "").trim();
+      const score = violationScore(recipe, size_g, originMap);
+      if (!best || score < best.score) best = { raw, score, attempt };
 
-        // Some SDK/builds may return already-parsed JSON in output_text, still parse safely
-        const raw = safeJsonParse(rawText);
+      validateStrict(recipe, size_g, originMap);
 
-        try {
-          if (!raw) throw new Error("Model returned non-JSON text");
+      const strictRecipe = recipe.map((r) => ({
+        origin_code: r.origin_code,
+        grams: r.grams,
+      }));
 
-          const recipe = raw?.recipe;
-
-          const score = violationScore(recipe, size_g, originMap);
-          if (!best || score < best.score) best = { raw, score, attempt };
-
-          validateStrict(recipe, size_g, originMap);
-
-          const strictRecipe = recipe.map((r) => ({
-            origin_code: r.origin_code,
-            grams: r.grams,
-          }));
-
-          const pricing = priceBlend(strictRecipe, originMap);
-
-          const blendProfile = computeBlendProfile(strictRecipe, originMap);
-          const chart = buildChartPayload(blendProfile, targetProfile);
-
-          const outRecipe = strictRecipe.map((rr) => {
-            const o = originMap.get(rr.origin_code);
-            const found = (raw.recipe || []).find((x) => x?.origin_code === rr.origin_code);
-            return {
-              origin_code: rr.origin_code,
-              origin_name: o?.name || rr.origin_code,
-              grams: rr.grams,
-              explain: found?.explain || null,
-            };
-          });
-
-          return res.json({
-            blend_name_suggestion: raw.blend_name_suggestion || "APEX Custom Blend",
-            recipe: outRecipe,
-            optimality_proof: raw.optimality_proof || null,
-            taste_persona_letter: raw.taste_persona_letter || null,
-            target_profile: targetProfile,
-            blend_profile: blendProfile,
-            chart,
-            price: pricing.total,
-            pricing,
-            meta: {
-              attempts: attempt,
-              usedAutofix: false,
-              stockSource: "db",
-              model: OPENAI_MODEL,
-              format: FORMAT_NAME,
-            },
-          });
-        } catch (e) {
-          lastError = String(e?.message || e);
-          continue;
-        }
-      }
-
-      if (!best) throw new Error("No usable output after attempts");
-
-      const fixedRecipe = autofixBestAttempt(best.raw?.recipe, size_g, originMap);
-      validateStrict(fixedRecipe, size_g, originMap);
-
-      const pricing = priceBlend(fixedRecipe, originMap);
-      const blendProfile = computeBlendProfile(fixedRecipe, originMap);
+      const pricing = priceBlend(strictRecipe, originMap);
+      const blendProfile = computeBlendProfile(strictRecipe, originMap);
       const chart = buildChartPayload(blendProfile, targetProfile);
 
-      const fallbackRecipe = fixedRecipe.map((rr) => {
+      const outRecipe = strictRecipe.map((rr) => {
         const o = originMap.get(rr.origin_code);
+        const found = (raw.recipe || []).find((x) => x?.origin_code === rr.origin_code);
         return {
           origin_code: rr.origin_code,
           origin_name: o?.name || rr.origin_code,
           grams: rr.grams,
-          explain: {
-            role_in_structure: "Balance (Fallback)",
-            why_this_origin: [
-              "Chosen from currently available stock; fallback mode focuses on correctness over nuanced optimization.",
-              "Profile alignment uses only provided notes and sensory numbers.",
-            ],
-            why_this_grams: [
-              `Normalized to exactly ${size_g}g while keeping each component meaningful (>= 20g) and within stock.`,
-              "Adjusting any component by ±20g will shift balance, but constraints must remain satisfied.",
-            ],
-            difference_vs_alternatives: [],
-            honesty_clause:
-              "Fallback explanation stays conservative: no invented tasting claims, only data-bound reasoning.",
-          },
+          explain: found?.explain || null,
         };
       });
 
-      return res.json({
-        blend_name_suggestion: safeStr(best.raw?.blend_name_suggestion, "APEX Custom Blend"),
-        recipe: fallbackRecipe,
-        optimality_proof: {
-          objective: line,
-          constraints_checklist: [
-            `Total equals exactly ${size_g}g`,
-            "2..5 origins, each >=20g integer",
-            "Each grams <= maxGrams (stock)",
-            "No duplicate origins",
-          ],
-          score_logic: [
-            "Fallback used because AI output did not pass strict validation after multiple attempts.",
-            "This result is constraint-correct; taste optimization is limited in autofix.",
-          ],
-          counterfactuals: [
-            {
-              change: "If we push one dial (e.g., more fruitiness)",
-              what_would_change_in_recipe:
-                "We would shift grams toward higher-fruitiness origins if stock allows.",
-              why_current_is_optimum_for_given_prefs:
-                "Current output prioritizes strict correctness under failure conditions.",
-            },
-          ],
-          stock_respect_notes: ["All grams are within available stock for each origin."],
-        },
-        taste_persona_letter: {
-          title: "Your Coffee Persona",
-          opening:
-            "Based on your selected preferences, this blend was built to respect your choices and the available stock with strict correctness.",
-          traits: [
-            {
-              label: "Taste compass",
-              evidence: "Derived only from your flavor_direction/acidity/milk selections.",
-            },
-            { label: "Ritual style", evidence: "Derived only from your brew method + timing selections." },
-            { label: "Power dial", evidence: "Derived only from your strength selection." },
-          ],
-          why_this_blend_matches_you: [
-            "It stays inside your chosen direction without inventing notes.",
-            "It preserves balance by enforcing meaningful minimum contributions per origin.",
-            "It respects stock so the blend is actually producible.",
-          ],
-          how_to_brew_best: [
-            "Keep ratio consistent. If you use milk, extract slightly stronger or tighten brew ratio for clarity.",
-          ],
-          closing: "If you tweak your preferences, we can re-optimize with a different structure.",
-        },
+      return {
+        blend_name_suggestion: raw.blend_name_suggestion || "APEX Custom Blend",
+        recipe: outRecipe,
+        optimality_proof: raw.optimality_proof || null,
+        taste_persona_letter: raw.taste_persona_letter || null,
         target_profile: targetProfile,
         blend_profile: blendProfile,
         chart,
         price: pricing.total,
         pricing,
         meta: {
-          attempts: MAX_ATTEMPTS,
-          usedAutofix: true,
-          bestAttempt: best.attempt,
-          bestScore: best.score,
+          attempts: attempt,
+          usedAutofix: false,
           stockSource: "db",
           model: OPENAI_MODEL,
           format: FORMAT_NAME,
         },
+      };
+    } catch (e) {
+      lastError = String(e?.message || e);
+      continue;
+    }
+  }
+
+  if (!best) throw new Error("No usable output after attempts");
+
+  // ✅ fallback autofix
+  const fixedRecipe = autofixBestAttempt(best.raw?.recipe, size_g, originMap);
+  validateStrict(fixedRecipe, size_g, originMap);
+
+  const pricing = priceBlend(fixedRecipe, originMap);
+  const blendProfile = computeBlendProfile(fixedRecipe, originMap);
+  const chart = buildChartPayload(blendProfile, targetProfile);
+
+  const fallbackRecipe = fixedRecipe.map((rr) => {
+    const o = originMap.get(rr.origin_code);
+    return {
+      origin_code: rr.origin_code,
+      origin_name: o?.name || rr.origin_code,
+      grams: rr.grams,
+      explain: {
+        role_in_structure: "Balance (Fallback)",
+        why_this_origin: [
+          "Chosen from currently available stock; fallback mode focuses on correctness over nuanced optimization.",
+          "Profile alignment uses only provided notes and sensory numbers.",
+        ],
+        why_this_grams: [
+          `Normalized to exactly ${size_g}g while keeping each component meaningful (>= 20g) and within stock.`,
+          "Adjusting any component by ±20g will shift balance, but constraints must remain satisfied.",
+        ],
+        difference_vs_alternatives: [],
+        honesty_clause:
+          "Fallback explanation stays conservative: no invented tasting claims, only data-bound reasoning.",
+      },
+    };
+  });
+
+  return {
+    blend_name_suggestion: safeStr(best.raw?.blend_name_suggestion, "APEX Custom Blend"),
+    recipe: fallbackRecipe,
+    optimality_proof: {
+      objective: line,
+      constraints_checklist: [
+        `Total equals exactly ${size_g}g`,
+        "2..5 origins, each >=20g integer",
+        "Each grams <= maxGrams (stock)",
+        "No duplicate origins",
+      ],
+      score_logic: [
+        "Fallback used because AI output did not pass strict validation after multiple attempts.",
+        "This result is constraint-correct; taste optimization is limited in autofix.",
+      ],
+      counterfactuals: [
+        {
+          change: "If we push one dial (e.g., more fruitiness)",
+          what_would_change_in_recipe:
+            "We would shift grams toward higher-fruitiness origins if stock allows.",
+          why_current_is_optimum_for_given_prefs:
+            "Current output prioritizes strict correctness under failure conditions.",
+        },
+      ],
+      stock_respect_notes: ["All grams are within available stock for each origin."],
+    },
+    taste_persona_letter: {
+      title: "Your Coffee Persona",
+      opening:
+        "Based on your selected preferences, this blend was built to respect your choices and the available stock with strict correctness.",
+      traits: [
+        {
+          label: "Taste compass",
+          evidence: "Derived only from your flavor_direction/acidity/milk selections.",
+        },
+        {
+          label: "Ritual style",
+          evidence: "Derived only from your brew method + timing selections.",
+        },
+        { label: "Power dial", evidence: "Derived only from your strength selection." },
+      ],
+      why_this_blend_matches_you: [
+        "It stays inside your chosen direction without inventing notes.",
+        "It preserves balance by enforcing meaningful minimum contributions per origin.",
+        "It respects stock so the blend is actually producible.",
+      ],
+      how_to_brew_best: [
+        "Keep ratio consistent. If you use milk, extract slightly stronger or tighten brew ratio for clarity.",
+      ],
+      closing: "If you tweak your preferences, we can re-optimize with a different structure.",
+    },
+    target_profile: targetProfile,
+    blend_profile: blendProfile,
+    chart,
+    price: pricing.total,
+    pricing,
+    meta: {
+      attempts: MAX_ATTEMPTS,
+      usedAutofix: true,
+      bestAttempt: best.attempt,
+      bestScore: best.score,
+      stockSource: "db",
+      model: OPENAI_MODEL,
+      format: FORMAT_NAME,
+    },
+  };
+}
+
+// ================== Health ==================
+app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now(), worker: WORKER_ID }));
+
+// ================== Recommend (Async Job) ==================
+app.post("/api/recommend", async (req, res) => {
+  try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+    if (!process.env.OPENAI_API_KEY) throw new Error("Server missing OPENAI_API_KEY");
+
+    // lock model
+    if (OPENAI_MODEL !== "gpt-5.2") {
+      return res.status(400).json({
+        ok: false,
+        error: `Server locked to gpt-5.2. Current OPENAI_MODEL="${OPENAI_MODEL}" not allowed.`,
       });
-    } finally {
-      clearTimeout(timer);
     }
+
+    const { size_g, line, preferences } = req.body || {};
+    if (!Number.isInteger(size_g) || size_g <= 0) throw new Error("size_g must be positive int");
+    if (line !== "daily" && line !== "premium") throw new Error("line must be daily|premium");
+    if (!preferences) throw new Error("preferences required");
+
+    const payload = { size_g, line, preferences };
+    const job = await createJob("recommend", payload);
+
+    return res.json({ ok: true, job_id: job.id, status: job.status });
   } catch (e) {
-    const msg = String(e?.message || e);
-    // Abort timeout
-    if (msg.toLowerCase().includes("aborted") || msg.toLowerCase().includes("abort")) {
-      return res.status(504).json({ error: "OpenAI timeout. Try again." });
-    }
-    res.status(400).json({ error: msg });
+    return res.status(400).json({ ok: false, error: String(e?.message || e) });
+  }
+});
+
+// Poll job
+app.get("/api/jobs/:id", async (req, res) => {
+  try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+
+    const job = await readJob(req.params.id);
+
+    return res.json({
+      ok: true,
+      job: {
+        id: job.id,
+        type: job.type,
+        status: job.status,
+        attempts: job.attempts,
+        created_at: job.created_at,
+        updated_at: job.updated_at,
+        error: job.error,
+        result: job.result,
+      },
+    });
+  } catch (e) {
+    return res.status(404).json({ ok: false, error: String(e?.message || e) });
   }
 });
 
@@ -943,6 +1118,8 @@ const ORIGIN_SEL = `
  */
 app.get("/api/admin/origins", requireAdmin, async (req, res) => {
   try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+
     const includeInactive = String(req.query.include_inactive || "0") === "1";
 
     let q = supabaseAdmin
@@ -966,6 +1143,8 @@ app.get("/api/admin/origins", requireAdmin, async (req, res) => {
  */
 app.post("/api/admin/origins", requireAdmin, async (req, res) => {
   try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+
     const b = req.body || {};
 
     const code = safeStr(b.code).trim();
@@ -1010,6 +1189,8 @@ app.post("/api/admin/origins", requireAdmin, async (req, res) => {
  */
 app.patch("/api/admin/origins/:code", requireAdmin, async (req, res) => {
   try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+
     const code = safeStr(req.params.code).trim();
     if (!code) return res.status(400).json({ error: "code required" });
 
@@ -1027,7 +1208,16 @@ app.patch("/api/admin/origins/:code", requireAdmin, async (req, res) => {
         : [];
     }
 
-    for (const k of ["acidity","body","sweetness","bitterness","aroma","fruitiness","chocolate","nutty"]) {
+    for (const k of [
+      "acidity",
+      "body",
+      "sweetness",
+      "bitterness",
+      "aroma",
+      "fruitiness",
+      "chocolate",
+      "nutty",
+    ]) {
       if (b[k] != null) patch[k] = clamp10(b[k], 5);
     }
 
@@ -1056,6 +1246,8 @@ app.patch("/api/admin/origins/:code", requireAdmin, async (req, res) => {
  */
 app.delete("/api/admin/origins/:code", requireAdmin, async (req, res) => {
   try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+
     const code = safeStr(req.params.code).trim();
     if (!code) return res.status(400).json({ error: "code required" });
 
@@ -1077,6 +1269,8 @@ app.delete("/api/admin/origins/:code", requireAdmin, async (req, res) => {
 // ================== Admin Orders APIs ==================
 app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+
     const limit = Math.min(parseInt(req.query.limit || "200", 10), 500);
 
     const { data: ords, error: ordErr } = await supabaseAdmin
@@ -1129,6 +1323,8 @@ app.get("/api/admin/orders", requireAdmin, async (req, res) => {
 
 app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
   try {
+    if (!supabaseAdmin) throw new Error("Server missing Supabase env vars");
+
     const id = req.params.id;
     const { status } = req.body || {};
 
@@ -1174,17 +1370,83 @@ app.get(/^(?!\/api).*/, (req, res) => {
 
 // ================== Error middleware ==================
 app.use((err, req, res, next) => {
-  // CORS errors or any other thrown errors in middleware
   const msg = String(err?.message || err);
+
+  // If CORS origin denied, browser will block anyway; but return 403 for clarity
   if (msg.startsWith("Not allowed by CORS")) {
     return res.status(403).json({ error: msg });
   }
+
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "Server error" });
 });
 
+// ================== Worker loop ==================
+let workerRunning = false;
+
+async function workerTickOnce() {
+  if (!WORKER_ENABLED) return;
+  if (!supabaseAdmin) return;
+  if (workerRunning) return;
+
+  workerRunning = true;
+  try {
+    const job = await lockNextQueuedJob("recommend");
+    if (!job) {
+      await sleep(WORKER_IDLE_SLEEP_MS);
+      return;
+    }
+
+    await bumpAttempts(job.id, job.attempts);
+
+    try {
+      const result = await runRecommend(job.payload);
+      await markJobSuccess(job.id, result);
+    } catch (e) {
+      const errMsg = String(e?.message || e);
+
+      // retry logic (simple): if attempts < JOB_MAX_ATTEMPTS -> back to queued
+      const attemptsNow = (job.attempts || 0) + 1;
+      if (attemptsNow < JOB_MAX_ATTEMPTS) {
+        await supabaseAdmin
+          .from("jobs")
+          .update({
+            status: "queued",
+            error: errMsg,
+            locked_at: null,
+            locked_by: null,
+            updated_at: nowIso(),
+          })
+          .eq("id", job.id);
+      } else {
+        await markJobFailed(job.id, errMsg);
+      }
+    }
+  } catch (e) {
+    console.error("Worker tick error:", e);
+  } finally {
+    workerRunning = false;
+  }
+}
+
+function startWorkerLoop() {
+  if (!WORKER_ENABLED) {
+    console.log("Worker disabled (WORKER_ENABLED=0)");
+    return;
+  }
+  if (!supabaseAdmin) {
+    console.log("Worker not started: missing Supabase env vars");
+    return;
+  }
+  console.log(`Worker started: ${WORKER_ID} poll=${WORKER_POLL_MS}ms`);
+  setInterval(() => {
+    workerTickOnce().catch((e) => console.error("workerTickOnce fatal:", e));
+  }, WORKER_POLL_MS);
+}
+
 // ================== Start ==================
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () =>
-  console.log("Backend running: http://localhost:" + PORT)
-);
+app.listen(PORT, () => {
+  console.log("Backend running: http://localhost:" + PORT);
+  startWorkerLoop();
+});
