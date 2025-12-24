@@ -10,9 +10,9 @@ const app = express();
 
 /**
  * CORS:
- * - لوكال: http://localhost:5173
- * - Render: https://apex-66yx.onrender.com (أو أي دومين عندك)
- * تقدر تزود أكتر من origin في ENV: CORS_ORIGINS مفصولين بفواصل
+ * - Local: http://localhost:5173
+ * - Render: https://apex-66yx.onrender.com (مثال)
+ * تقدر تزود origins في ENV: CORS_ORIGINS مفصولين بفواصل
  */
 const defaultCors = [
   "http://localhost:5173",
@@ -30,7 +30,7 @@ const allowedOrigins = Array.from(new Set([...defaultCors, ...extraCors]));
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow non-browser tools
+      // allow server-to-server or tools
       if (!origin) return cb(null, true);
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error("Not allowed by CORS: " + origin));
@@ -39,25 +39,24 @@ app.use(
   })
 );
 
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 
 // ================== OpenAI client ==================
+if (!process.env.OPENAI_API_KEY) {
+  console.warn("⚠️ Missing OPENAI_API_KEY");
+}
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ================== Supabase Admin (server-only) ==================
-if (!process.env.SUPABASE_URL) {
-  console.warn("⚠️ Missing SUPABASE_URL");
-}
-if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+if (!process.env.SUPABASE_URL) console.warn("⚠️ Missing SUPABASE_URL");
+if (!process.env.SUPABASE_SERVICE_ROLE_KEY)
   console.warn("⚠️ Missing SUPABASE_SERVICE_ROLE_KEY");
-}
 
+// IMPORTANT: service role should only live on server
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
-  {
-    auth: { persistSession: false },
-  }
+  { auth: { persistSession: false } }
 );
 
 // ================== Admin whitelist ==================
@@ -67,7 +66,8 @@ const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || "")
   .filter(Boolean);
 
 function isAdminEmail(email) {
-  return ADMIN_EMAILS.length ? ADMIN_EMAILS.includes(email) : false;
+  if (!ADMIN_EMAILS.length) return false;
+  return ADMIN_EMAILS.includes(email);
 }
 
 async function requireAdmin(req, res, next) {
@@ -76,6 +76,9 @@ async function requireAdmin(req, res, next) {
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
 
     if (!token) return res.status(401).json({ error: "Missing bearer token" });
+    if (!process.env.SUPABASE_SERVICE_ROLE_KEY || !process.env.SUPABASE_URL) {
+      return res.status(500).json({ error: "Server missing Supabase admin env" });
+    }
 
     // Validate token using Supabase (server-side)
     const { data, error } = await supabaseAdmin.auth.getUser(token);
@@ -97,51 +100,11 @@ async function requireAdmin(req, res, next) {
 
 // ================== Demo stock (بدّلها لاحقًا بـ DB) ==================
 const ORIGINS = [
-  {
-    code: "BR_SANTOS",
-    name: "Brazil Santos",
-    maxGrams: 4000,
-    costPerG: 0.85,
-    notes: ["chocolate", "nuts", "caramel"],
-    acidity: 3,
-    body: 8,
-  },
-  {
-    code: "CO_SUPREMO",
-    name: "Colombia Supremo",
-    maxGrams: 3000,
-    costPerG: 0.95,
-    notes: ["caramel", "cocoa"],
-    acidity: 6,
-    body: 6,
-  },
-  {
-    code: "ET_YIRG",
-    name: "Ethiopia Yirgacheffe",
-    maxGrams: 1200,
-    costPerG: 1.25,
-    notes: ["floral", "citrus"],
-    acidity: 8,
-    body: 4,
-  },
-  {
-    code: "HN_CLASSIC",
-    name: "Honduras Classic",
-    maxGrams: 2500,
-    costPerG: 0.9,
-    notes: ["nuts", "cocoa"],
-    acidity: 5,
-    body: 6,
-  },
-  {
-    code: "ID_SUMATRA",
-    name: "Indonesia Sumatra",
-    maxGrams: 1100,
-    costPerG: 1.05,
-    notes: ["earthy", "dark-chocolate"],
-    acidity: 3,
-    body: 9,
-  },
+  { code: "BR_SANTOS", name: "Brazil Santos", maxGrams: 4000, costPerG: 0.85, notes: ["chocolate", "nuts", "caramel"], acidity: 3, body: 8 },
+  { code: "CO_SUPREMO", name: "Colombia Supremo", maxGrams: 3000, costPerG: 0.95, notes: ["caramel", "cocoa"], acidity: 6, body: 6 },
+  { code: "ET_YIRG", name: "Ethiopia Yirgacheffe", maxGrams: 1200, costPerG: 1.25, notes: ["floral", "citrus"], acidity: 8, body: 4 },
+  { code: "HN_CLASSIC", name: "Honduras Classic", maxGrams: 2500, costPerG: 0.9, notes: ["nuts", "cocoa"], acidity: 5, body: 6 },
+  { code: "ID_SUMATRA", name: "Indonesia Sumatra", maxGrams: 1100, costPerG: 1.05, notes: ["earthy", "dark-chocolate"], acidity: 3, body: 9 },
 ];
 
 const PACKAGING_COST = 15;
@@ -243,9 +206,7 @@ function autofixBestAttempt(recipe, sizeG, originMap) {
   fixed = fixed.slice(0, 5);
 
   if (fixed.length < 2) {
-    const sorted = [...originMap.values()].sort(
-      (a, b) => a.costPerG - b.costPerG
-    );
+    const sorted = [...originMap.values()].sort((a, b) => a.costPerG - b.costPerG);
     const cheapest = sorted[0];
     const second = sorted[1];
     if (cheapest && !used.has(cheapest.code))
@@ -286,11 +247,10 @@ app.get("/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
 app.post("/api/recommend", async (req, res) => {
   try {
     const { size_g, line, preferences } = req.body || {};
-    if (!Number.isInteger(size_g) || size_g <= 0)
-      throw new Error("size_g must be positive int");
-    if (line !== "daily" && line !== "premium")
-      throw new Error("line must be daily|premium");
+    if (!Number.isInteger(size_g) || size_g <= 0) throw new Error("size_g must be positive int");
+    if (line !== "daily" && line !== "premium") throw new Error("line must be daily|premium");
     if (!preferences) throw new Error("preferences required");
+    if (!process.env.OPENAI_API_KEY) throw new Error("Server missing OPENAI_API_KEY");
 
     const originMap = new Map(ORIGINS.map((o) => [o.code, o]));
 
@@ -312,20 +272,13 @@ Line:
 - premium: best taste, ignore cost
 `;
 
-    const userPayload = {
-      size_g,
-      line,
-      preferences,
-      available_origins: ORIGINS,
-    };
+    const userPayload = { size_g, line, preferences, available_origins: ORIGINS };
 
     let best = null;
     let lastError = null;
 
     for (let attempt = 1; attempt <= 3; attempt++) {
-      const system =
-        systemBase +
-        (lastError ? `\nPrevious attempt failed: ${lastError}\nFix it.` : "");
+      const system = systemBase + (lastError ? `\nPrevious attempt failed: ${lastError}\nFix it.` : "");
 
       const r = await openai.responses.create({
         model: "gpt-4.1-mini",
@@ -346,11 +299,7 @@ Line:
 
         validateStrict(recipe, size_g, originMap);
 
-        const strictRecipe = recipe.map((x) => ({
-          origin_code: x.origin_code,
-          grams: x.grams,
-        }));
-
+        const strictRecipe = recipe.map((x) => ({ origin_code: x.origin_code, grams: x.grams }));
         const pricing = priceBlend(strictRecipe, originMap);
 
         return res.json({
@@ -398,20 +347,30 @@ Line:
   }
 });
 
-// ================== Admin APIs (RLS ON => via service role) ==================
+// ================== Admin APIs ==================
 /**
- * GET /api/admin/orders
- * بيرجع orders + items (عشان Admin يشوف التفاصيل كاملة)
+ * GET /api/admin/orders?limit=200
+ * بيرجع orders + items + location + snapshots (كامل)
  */
 app.get("/api/admin/orders", requireAdmin, async (req, res) => {
   try {
+    const limit = Math.min(parseInt(req.query.limit || "200", 10), 500);
+
     const { data: ords, error: ordErr } = await supabaseAdmin
       .from("orders")
       .select(
-        "id, created_at, status, payment, customer_name, customer_phone, customer_address, customer_notes, currency, total, user_id"
+        `
+        id, created_at, status, payment,
+        customer_name, customer_phone, customer_address, customer_notes,
+        currency, total,
+        user_id,
+        preferences,
+        location_mode, location_lat, location_lng, location_address, location_maps_url, location_place_id,
+        location_snapshot
+      `
       )
       .order("created_at", { ascending: false })
-      .limit(200);
+      .limit(limit);
 
     if (ordErr) return res.status(400).json({ error: ordErr.message });
 
@@ -421,7 +380,7 @@ app.get("/api/admin/orders", requireAdmin, async (req, res) => {
     if (orderIds.length) {
       const { data: items, error: itemsErr } = await supabaseAdmin
         .from("order_items")
-        .select("id, order_id, title, line, size_g, price, recipe")
+        .select("id, order_id, title, line, size_g, price, recipe, meta")
         .in("order_id", orderIds);
 
       if (itemsErr) return res.status(400).json({ error: itemsErr.message });
@@ -452,15 +411,27 @@ app.patch("/api/admin/orders/:id/status", requireAdmin, async (req, res) => {
   try {
     const id = req.params.id;
     const { status } = req.body || {};
+
     const allowed = ["new", "in_progress", "delivering", "delivered"];
     if (!allowed.includes(status))
       return res.status(400).json({ error: "Invalid status" });
 
     const { data, error } = await supabaseAdmin
       .from("orders")
-      .update({ status })
+      .update({
+        status,
+        // optional audit info if you want to store it later:
+        // updated_at: new Date().toISOString(),
+        // status_updated_by: req.adminUser?.email || null,
+      })
       .eq("id", id)
-      .select("id, status")
+      .select(
+        `
+        id, status, created_at,
+        customer_name, customer_phone, customer_address,
+        currency, total
+      `
+      )
       .single();
 
     if (error) return res.status(400).json({ error: error.message });
@@ -479,7 +450,7 @@ const __dirname = path.dirname(__filename);
 const WEB_DIST = path.resolve(__dirname, "../web/dist");
 app.use(express.static(WEB_DIST));
 
-// SPA fallback (Express 5 compatible) - exclude /api
+// SPA fallback - exclude /api
 app.get(/^(?!\/api).*/, (req, res) => {
   res.sendFile(path.join(WEB_DIST, "index.html"));
 });

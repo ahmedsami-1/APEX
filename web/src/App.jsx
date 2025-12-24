@@ -156,6 +156,7 @@ function Stepper({ step, onJump }) {
                   ? "rgba(255,255,255,0.10)"
                   : "rgba(255,255,255,0.05)",
                 opacity: isOn ? 1 : 0.55,
+                color: "rgba(255,255,255,0.90)",
               }}
               title={`Go to: ${s.t}`}
             >
@@ -690,8 +691,23 @@ function MainApp() {
   const [session, setSession] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
 
-  // Stepper (✅ safe + render-friendly)
+  // Stepper
   const [step, setStep] = useState(1); // 1 prefs, 2 review, 3 checkout, 4 done
+
+  // Admin (RLS-safe via server endpoints)
+  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminOrders, setAdminOrders] = useState([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminErr, setAdminErr] = useState("");
+  const [adminQ, setAdminQ] = useState("");
+  const [adminStatusFilter, setAdminStatusFilter] = useState("all");
+  const [adminSelected, setAdminSelected] = useState(null);
+  const [adminUpdatingId, setAdminUpdatingId] = useState(null);
+
+  const ADMIN_EMAILS = (import.meta.env.VITE_ADMIN_EMAILS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
 
   // Blend builder
   const [line, setLine] = useState("daily"); // daily|premium
@@ -733,6 +749,7 @@ function MainApp() {
   const [ordersErr, setOrdersErr] = useState("");
 
   const user = session?.user || null;
+  const isAdmin = !!user?.email && (ADMIN_EMAILS.length ? ADMIN_EMAILS.includes(user.email) : false);
 
   const builderRef = useRef(null);
   const checkoutRef = useRef(null);
@@ -1096,6 +1113,88 @@ function MainApp() {
     }
   }
 
+  async function getAccessToken() {
+    const { data } = await supabase.auth.getSession();
+    return data?.session?.access_token || null;
+  }
+
+  async function adminLoadOrders() {
+    setAdminErr("");
+    setAdminLoading(true);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not logged in");
+
+      const res = await fetch(apiUrl("/api/admin/orders?limit=200"), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to load admin orders");
+
+      setAdminOrders(data.orders || []);
+    } catch (e) {
+      setAdminErr(String(e?.message || e));
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
+  async function adminSetStatus(orderId, nextStatus) {
+    setAdminUpdatingId(orderId);
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error("Not logged in");
+
+      const res = await fetch(apiUrl(`/api/admin/orders/${orderId}/status`), {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "Failed to update status");
+
+      const updated = data.order;
+      setAdminOrders((prev) => prev.map((o) => (o.id === updated.id ? { ...o, ...updated } : o)));
+      if (adminSelected?.id === updated.id) setAdminSelected((s) => (s ? { ...s, ...updated } : s));
+    } catch (e) {
+      alert(String(e?.message || e));
+    } finally {
+      setAdminUpdatingId(null);
+    }
+  }
+
+  const adminFiltered = useMemo(() => {
+    const q = adminQ.trim().toLowerCase();
+    return adminOrders.filter((o) => {
+      const matchStatus = adminStatusFilter === "all" ? true : String(o.status) === adminStatusFilter;
+      if (!q) return matchStatus;
+
+      const hay =
+        [
+          o.id,
+          o.customer_name,
+          o.customer_phone,
+          o.customer_address,
+          o.customer_notes,
+          o.payment,
+          o.currency,
+          o.location_address,
+          o.location_maps_url,
+          o.user_id,
+        ]
+          .map((x) => (x == null ? "" : String(x)))
+          .join(" ")
+          .toLowerCase();
+
+      return matchStatus && hay.includes(q);
+    });
+  }, [adminOrders, adminQ, adminStatusFilter]);
+
   const themeClass = line === "premium" ? "apexThemePremium" : "apexThemeDaily";
   const redirectTo = `${window.location.origin}/auth/callback`;
 
@@ -1109,7 +1208,23 @@ function MainApp() {
         </div>
 
         <div className="apexTopActions">
-          <button className="apexPillBtn" type="button" onClick={() => alert("Admin panel (next)")}>
+          <button
+            className="apexPillBtn"
+            type="button"
+            onClick={() => {
+              if (!user) {
+                setAuthOpen(true);
+                return;
+              }
+              if (!isAdmin) {
+                alert("Admin only.");
+                return;
+              }
+              setAdminOpen(true);
+              adminLoadOrders();
+            }}
+            title={isAdmin ? "Admin panel" : "Admins only"}
+          >
             Admin
           </button>
 
@@ -1533,6 +1648,208 @@ function MainApp() {
         </section>
       ) : null}
 
+      {/* ===== Admin Modal ===== */}
+      {adminOpen ? (
+        <div className="apexModalOverlay" onMouseDown={() => setAdminOpen(false)}>
+          <div className="apexModalCard" onMouseDown={(e) => e.stopPropagation()} style={{ width: "min(980px, 100%)" }}>
+            <div className="apexModalTop">
+              <div className="apexModalTitle">Admin Orders</div>
+              <button className="apexModalClose" type="button" onClick={() => setAdminOpen(false)}>
+                ✕
+              </button>
+            </div>
+
+            {!isAdmin ? <div className="apexError">Admin only.</div> : null}
+            {adminErr ? <div className="apexError">{adminErr}</div> : null}
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <input
+                  className="apexInput"
+                  placeholder="Search name / phone / address / order id…"
+                  value={adminQ}
+                  onChange={(e) => setAdminQ(e.target.value)}
+                  disabled={!isAdmin}
+                />
+
+                <select className="apexSelect" value={adminStatusFilter} onChange={(e) => setAdminStatusFilter(e.target.value)} disabled={!isAdmin}>
+                  <option value="all">All statuses</option>
+                  <option value="new">New</option>
+                  <option value="in_progress">In progress</option>
+                  <option value="delivering">Delivering</option>
+                  <option value="delivered">Delivered</option>
+                </select>
+
+                <button className="apexPillBtn" type="button" onClick={adminLoadOrders} disabled={!isAdmin}>
+                  {adminLoading ? "Loading..." : "Refresh"}
+                </button>
+              </div>
+
+              <div className="apexTinyNote">
+                Showing {adminFiltered.length} / {adminOrders.length} orders
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                {adminFiltered.map((o) => (
+                  <div key={o.id} className="apexRecipeRow" style={{ alignItems: "flex-start" }}>
+                    <div style={{ flex: "1 1 auto" }}>
+                      <div style={{ fontWeight: 900 }}>
+                        Order #{String(o.id).slice(0, 8).toUpperCase()} • {Number(o.total || 0)} {safeText(o.currency || "EGP")}
+                      </div>
+                      <div className="apexTinyNote" style={{ marginTop: 6 }}>
+                        <b>{safeText(o.customer_name)}</b> • {safeText(o.customer_phone)} <br />
+                        {safeText(o.customer_address)}
+                        <br />
+                        {o.created_at ? new Date(o.created_at).toLocaleString() : ""}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+                      <div className={`apexSavedMeta ${statusClass(o.status)}`} style={{ fontWeight: 950 }}>
+                        {prettyStatus(o.status)}
+                      </div>
+
+                      <select
+                        className="apexSelect"
+                        value={o.status || "new"}
+                        onChange={(e) => adminSetStatus(o.id, e.target.value)}
+                        disabled={!isAdmin || adminUpdatingId === o.id}
+                      >
+                        <option value="new">new</option>
+                        <option value="in_progress">in_progress</option>
+                        <option value="delivering">delivering</option>
+                        <option value="delivered">delivered</option>
+                      </select>
+
+                      <button className="apexPillBtn apexPillBtnGold" type="button" onClick={() => setAdminSelected(o)} disabled={!isAdmin}>
+                        View
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {adminLoading ? <div className="apexTinyNote">Loading…</div> : null}
+                {!adminLoading && adminFiltered.length === 0 ? <div className="apexSavedEmpty">No matching orders.</div> : null}
+              </div>
+            </div>
+
+            {adminSelected ? (
+              <div className="apexModalOverlay" onMouseDown={() => setAdminSelected(null)} style={{ background: "rgba(0,0,0,.55)" }}>
+                <div className="apexModalCard" onMouseDown={(e) => e.stopPropagation()} style={{ width: "min(920px, 100%)" }}>
+                  <div className="apexModalTop">
+                    <div className="apexModalTitle">
+                      Order #{String(adminSelected.id).slice(0, 8).toUpperCase()}
+                    </div>
+                    <button className="apexModalClose" type="button" onClick={() => setAdminSelected(null)}>
+                      ✕
+                    </button>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                    <div className={`apexSavedMeta ${statusClass(adminSelected.status)}`} style={{ fontWeight: 950 }}>
+                      {prettyStatus(adminSelected.status)}
+                    </div>
+
+                    <select
+                      className="apexSelect"
+                      value={adminSelected.status || "new"}
+                      onChange={(e) => adminSetStatus(adminSelected.id, e.target.value)}
+                      disabled={!isAdmin || adminUpdatingId === adminSelected.id}
+                      style={{ maxWidth: 220 }}
+                    >
+                      <option value="new">new</option>
+                      <option value="in_progress">in_progress</option>
+                      <option value="delivering">delivering</option>
+                      <option value="delivered">delivered</option>
+                    </select>
+
+                    <div className="apexTinyNote">
+                      Total: <b>{Number(adminSelected.total || 0)} {safeText(adminSelected.currency || "EGP")}</b>
+                    </div>
+                  </div>
+
+                  <div className="apexCardDivider" style={{ margin: "12px 0" }} />
+
+                  <div className="apexTinyNote" style={{ lineHeight: 1.6 }}>
+                    <b>Customer:</b> {safeText(adminSelected.customer_name)} <br />
+                    <b>Phone:</b> {safeText(adminSelected.customer_phone)} <br />
+                    <b>Address:</b> {safeText(adminSelected.customer_address)} <br />
+                    {adminSelected.customer_notes ? (
+                      <>
+                        <b>Notes:</b> {safeText(adminSelected.customer_notes)} <br />
+                      </>
+                    ) : null}
+                    <b>Payment:</b> {safeText(adminSelected.payment)} <br />
+                    <b>Created:</b> {adminSelected.created_at ? new Date(adminSelected.created_at).toLocaleString() : ""} <br />
+                  </div>
+
+                  {adminSelected.location_lat && adminSelected.location_lng ? (
+                    <div className="apexResult" style={{ margin: "12px 0 0" }}>
+                      <div style={{ fontWeight: 900, marginBottom: 6 }}>Location</div>
+                      <div className="apexTinyNote">
+                        {safeText(adminSelected.location_address || "Pinned")}
+                        <br />
+                        lat: {Number(adminSelected.location_lat).toFixed(6)} | lng: {Number(adminSelected.location_lng).toFixed(6)}
+                        <br />
+                        {adminSelected.location_maps_url ? (
+                          <a href={adminSelected.location_maps_url} target="_blank" rel="noreferrer">
+                            Open in Google Maps
+                          </a>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="apexRecipeTitle" style={{ marginTop: 14 }}>Items</div>
+                  {adminSelected.items?.length ? (
+                    <div className="apexRecipeGrid" style={{ marginTop: 8 }}>
+                      {adminSelected.items.map((it) => (
+                        <div className="apexRecipeRow" key={it.id}>
+                          <div className="apexRecipeOrigin">
+                            <div className="apexRecipeName">{safeText(it.title)}</div>
+                            <div className="apexRecipeCode">
+                              {safeText(it.line).toUpperCase()} • {Number(it.size_g)}g
+                            </div>
+                            {Array.isArray(it.recipe) && it.recipe.length ? (
+                              <div className="apexTinyNote" style={{ marginTop: 6 }}>
+                                {it.recipe.map((r, idx) => (
+                                  <div key={idx}>
+                                    {safeText(r.origin_name || r.origin_code)}: {Number(r.grams)}g
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                          <div className="apexRecipeGrams">{Number(it.price)} EGP</div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="apexSavedEmpty">No items.</div>
+                  )}
+
+                  {adminSelected.location_snapshot || adminSelected.preferences ? (
+                    <div className="apexResult" style={{ marginTop: 14 }}>
+                      <div style={{ fontWeight: 900, marginBottom: 6 }}>Raw Snapshots</div>
+                      <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontSize: 12, color: "rgba(255,255,255,.78)" }}>
+{JSON.stringify(
+  {
+    preferences: adminSelected.preferences ?? null,
+    location_snapshot: adminSelected.location_snapshot ?? null,
+  },
+  null,
+  2
+)}
+                      </pre>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {/* ===== Auth Modal ===== */}
       {authOpen ? (
         <div className="apexModalOverlay" onMouseDown={() => setAuthOpen(false)}>
@@ -1554,7 +1871,13 @@ function MainApp() {
                 </button>
               </div>
             ) : (
-              <Auth supabaseClient={supabase} appearance={{ theme: ThemeSupa }} providers={["google"]} redirectTo={redirectTo} theme="dark" />
+              <Auth
+                supabaseClient={supabase}
+                appearance={{ theme: ThemeSupa }}
+                providers={["google"]}
+                redirectTo={redirectTo}
+                theme="dark"
+              />
             )}
 
             <div className="apexTinyNote" style={{ marginTop: 10 }}>
